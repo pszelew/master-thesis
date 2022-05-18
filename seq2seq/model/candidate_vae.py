@@ -1,69 +1,64 @@
-import imp
+from typing import Union
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.nn.utils.rnn import PackedSequence
 
 from .base import BaseVAE
-from .encoder import CandidateEncoder
-from .decoder import CandidateAttnDecoder
+from .encoder import CandidateEncoder, CandidateEncoderConfig
+from .decoder import CandidateDecoder, CandidateDecoderConfig
 
 
-class CandidateBetaVAE(BaseVAE):
+class CandidateVAE(BaseVAE):
     num_iter = 0  # Global static variable to keep track of iterations
 
     def __init__(
         self,
-        in_channels: int,
-        vocab_size: int,  # size of a vocabulary
-        latent_dim: int,  # size of a latent dimension
-        beta: int = 4,
-        gamma: float = 1000.0,
-        max_capacity: int = 25,
-        Capacity_max_iter: int = 1e5,
-        loss_type: str = "B",
-        num_layers_lstm: int = 1,
-        **kwargs
+        encoder_config: CandidateEncoderConfig,
+        decoder_config: CandidateDecoderConfig,
     ) -> None:
-        super(CandidateBetaVAE, self).__init__()
+        """
+        Parameters
+        ----------
+        encoder_config : CandidateEncoderConfig
+            Encoder config
+        decoder_config : CandidateDecoderConfig
+            Decoder config
+        """
+        super(CandidateVAE, self).__init__()
 
-        self.vocab_size = vocab_size
-        self.latent_dim = latent_dim
-
-        self.beta = beta
-        self.gamma = gamma
-        self.loss_type = loss_type
-        self.C_max = torch.Tensor([max_capacity])
-        self.C_stop_iter = Capacity_max_iter
-        self.num_layers_lstm = num_layers_lstm
-        self.embedding = nn.Embedding(vocab_size, latent_dim)
-
-        self.encoder = CandidateEncoder(
-            embedding=self.embedding,
-            latent_dim=latent_dim,
-            num_layers_lstm=num_layers_lstm,
-        )
+        # Build Encoder
+        self.encoder = CandidateEncoder(encoder_config)
 
         # Build Decoder
-        self.decoder = CandidateAttnDecoder(
-            embedding=self.embedding,
-            latent_dim=latent_dim,
-            num_layers_lstm=1,
-            dropout_p=0.1,
-            max_length=20,
-        )
+        self.decoder = CandidateDecoder(decoder_config)
 
-    def encode(self, input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def encode(
+        self, input_tensor: Union[torch.Tensor, PackedSequence]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Encodes the input by passing through the encoder network
         and returns the latent codes.
-        :param input: (Tensor) Input tensor to encoder [N x C x H x W]
-        :return: (Tensor) List of latent codes
-        """
-        mu, log_var = self.encoder(input)
 
-        # Split the result into mu and var components
-        # of the latent Gaussian distribution
-        return mu, log_var
+        Parameters
+        ----------
+        input_tensor : Union[torch.Tensor, PackedSequence]
+            Input of the encoder. Can be tensor od PackedSequence
+            Tensor of shape [N, L, D], where:
+            - N is a batch size
+            - L is sequence length
+            - D is embedding size
+        Returns
+        -------
+            mu : torch.Tensor
+                Mean in VAE
+            var : torch.Tensor
+                Logvar in vae
+            output : torch.Tensor
+                Outputs in earch timestep of an encoder
+        """
+        mu, log_var, outputs = self.encoder(input_tensor)
+        return mu, log_var, outputs
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         result = self.decoder_input(z)

@@ -1,0 +1,25 @@
+vae:
+  general:
+    embedder_name: lang
+    data_path: data/extracted_sellers.json
+    batch_size: 3
+    max_seq_len: 256
+    bidirectional: True
+    lstm_hidden_dim: 64
+  encoder:
+    latent_dim: 16
+    num_layers_lstm: 64
+    hidden_dims: [64]
+    dropout: 0.1
+  decoder:
+    latent_dim: 16
+    num_layers_lstm: 8
+    hidden_dims: [64]
+    dropout: 0.1
+    vattn: True
+    
+    
+
+
+  
+  
