@@ -1,25 +1,36 @@
+# Configuration for CandidateVAE
+
 vae:
   general:
-    embedder_name: lang
+    # One of lang/fassttext/roberta
+    embedder_name: roberta
+    # path to dataset file
     data_path: data/extracted_sellers.json
     batch_size: 3
+    # Longer texts will be trimmed and shorter padded to this value
     max_seq_len: 256
+    # If True encoder will be bidirectional.
     bidirectional: True
+    # Hidden dims of LSTMs used in encoder and decoder
     lstm_hidden_dim: 64
-  encoder:
+    # Shape of a latent vector in VAE
     latent_dim: 16
+  encoder:
+    # Number of layers in lstm network
     num_layers_lstm: 64
+    # Hidden linear layers in encoder. Applied between LSTM and (fc_mu, fc_var)
     hidden_dims: [64]
+    # Dropout applies to outputs of hidden layers
     dropout: 0.1
   decoder:
-    latent_dim: 16
+    # Number of layers in lstm network of decoder
     num_layers_lstm: 8
+    # Number of layers in lstm network of decoder
     hidden_dims: [64]
+    # Dropout applied to relu layers
     dropout: 0.1
+    # If true variational attention will be used instead of a deterministic one
+    # https://arxiv.org/pdf/1712.08207.pdf
     vattn: True
-    
-    
-
-
-  
-  
+    # Bypass mechanism is described here https://arxiv.org/pdf/1712.08207.pdf
+    bypassing: False

@@ -35,17 +35,16 @@ class CandidateEncoderConfig(BaseModel):
         Device used to compute tensors "cuda" or "cpu"
     """
 
-    latent_dim: int = 32
-    lstm_hidden_dim: int = 32
-    num_layers_lstm: int = 1
+    latent_dim: int
+    lstm_hidden_dim: int
+    num_layers_lstm: int
     embedding_size: int
-    hidden_dims: list = []
-    bidirectional: bool = True
-    dropout: float = 0.1
+    hidden_dims: list
+    bidirectional: bool
+    dropout: float
     embedder_name: EmbedderType
     num_words: Optional[int]
-    device: str = "cuda"
-    max_seq_len: int = 256
+    device: str
 
 
 class CandidateEncoder(nn.Module):
@@ -87,8 +86,7 @@ class CandidateEncoder(nn.Module):
         for i, dim in enumerate(self.config.hidden_dims):
             self.fcs.append(
                 nn.Linear(
-                    self.config.lstm_hidden_dim
-                    * (2 if self.config.bidirectional else 1)
+                    self.config.lstm_hidden_dim * (1 + self.config.bidirectional)
                     if i == 0
                     else self.config.hidden_dims[i - 1],
                     dim,
@@ -99,7 +97,7 @@ class CandidateEncoder(nn.Module):
         fc_mu_in_size = (
             self.config.hidden_dims[-1]
             if self.config.hidden_dims
-            else self.config.lstm_hidden_dim * (2 if self.config.bidirectional else 1)
+            else self.config.lstm_hidden_dim * (1 + self.config.bidirectional)
         )
 
         self.fc_mu = nn.Linear(fc_mu_in_size, self.config.latent_dim)
@@ -116,19 +114,31 @@ class CandidateEncoder(nn.Module):
         ----------
         input_tensor : Union[torch.Tensor, PackedSequence]
             Input of the encoder. Can be tensor od PackedSequence
-            Tensor of shape [N, L, D], where:
+            The tensor of shape [N, L, D], where:
             - N is a batch size
-            - L is sequence length
+            - L is max sequence length
             - D is embedding size
 
         Returns
         -------
         mu : torch.Tensor
-            Mean in VAE
-        var : torch.Tensor
-            Logvar in vae
+            Mean of the latent Gaussian
+            Tensor of shape [N, Z], where:
+            - N is a batch size
+            - Z is a latent space dimension
+        logvar : torch.Tensor
+            Logarithm of standard deviation of the latent Gaussian
+            Tensor of shape [N, Z], where:
+            - N is a batch size
+            - Z is a latent space dimension
+
         output : torch.Tensor
-            Outputs in earch timestep of an encoder
+            Outputs in each timestep of an encoder
+            The tensor of shape [N, L, H * D], where:
+            - N is a batch size
+            - L is the sequence length
+            - H is the hidden size of the LSTM
+            - D is 2 if encoder is bidirectional otherwise 1
         """
         if self.embedding:
             if isinstance(input_tensor, PackedSequence):
@@ -144,18 +154,36 @@ class CandidateEncoder(nn.Module):
             X = self.dropout(self.relu(X))
 
         mu = self.fc_mu(X)
-        var = self.fc_var(X)
+        logvar = self.fc_var(X)
 
-        return mu, var, output
+        return mu, logvar, output
 
     def init_hidden_cell(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Inits hidden cells filled with zeros
+
+        Returns
+        -------
+        hidden_state : torch.Tensor
+            Hidden state for lstm filled with zeros
+            The tensor of shape [D * num_layers, H], where:
+            - D is 2 if bidirectional otherwise 1
+            - num_layers is a number of layers in LSTM
+            - H is hidden size of LSTM
+        hidden_state : torch.Tensor
+            Cell state for lstm filled with zeros
+            The tensor of shape [D * num_layers, H], where:
+            - D is 2 if bidirectional otherwise 1
+            - num_layers is a number of layers in LSTM
+            - H is hidden size of LSTM
+        """
         return torch.zeros(
-            self.config.num_layers_lstm * 2,
+            self.config.num_layers_lstm * (1 + self.config.bidirectional),
             batch_size,
             self.config.lstm_hidden_dim,
             device=self.config.device,
         ), torch.zeros(
-            self.config.num_layers_lstm * 2,
+            self.config.num_layers_lstm * (1 + self.config.bidirectional),
             batch_size,
             self.config.lstm_hidden_dim,
             device=self.config.device,

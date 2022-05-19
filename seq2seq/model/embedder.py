@@ -28,14 +28,18 @@ class Embedder:
             self.model = RobertaModel.from_pretrained("roberta-base")
             self.tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
-    def __call__(self, text: str):
+    def __call__(self, text: str, pooled: Optional[bool] = False):
         if self.model_name == EmbedderType.FASTTEXT:
             return torch.tensor(
                 [self.model.get_word_vector(word) for word in text.split()]
             )
         if self.model_name == EmbedderType.ROBERTA:
             encoded_input = self.tokenizer(text, return_tensors="pt")
-            return self.model(**encoded_input).last_hidden_state.squeeze(dim=0)
+            return (
+                self.model(**encoded_input).pooler_output
+                if pooled
+                else self.model(**encoded_input).last_hidden_state.squeeze(dim=0)
+            )
 
         return self.tensorFromSentence(text)
 

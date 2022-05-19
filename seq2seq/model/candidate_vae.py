@@ -10,6 +10,10 @@ from .decoder import CandidateDecoder, CandidateDecoderConfig
 
 
 class CandidateVAE(BaseVAE):
+    """
+    Candidate VAE network
+    """
+
     num_iter = 0  # Global static variable to keep track of iterations
 
     def __init__(
@@ -21,9 +25,9 @@ class CandidateVAE(BaseVAE):
         Parameters
         ----------
         encoder_config : CandidateEncoderConfig
-            Encoder config
+            Encoder configuration
         decoder_config : CandidateDecoderConfig
-            Decoder config
+            Decoder configuration
         """
         super(CandidateVAE, self).__init__()
 
@@ -38,33 +42,30 @@ class CandidateVAE(BaseVAE):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Encodes the input by passing through the encoder network
-        and returns the latent codes.
+        and returns the latent codes and outputs of lstm network.
 
         Parameters
         ----------
         input_tensor : Union[torch.Tensor, PackedSequence]
             Input of the encoder. Can be tensor od PackedSequence
-            Tensor of shape [N, L, D], where:
+            Tensor of shape [N, S, D], where:
             - N is a batch size
-            - L is sequence length
-            - D is embedding size
+            - S is a sequence length
+            - D is an embedding size
         Returns
         -------
-            mu : torch.Tensor
-                Mean in VAE
-            var : torch.Tensor
-                Logvar in vae
-            output : torch.Tensor
-                Outputs in earch timestep of an encoder
+        mu : torch.Tensor
+            Mean in VAE
+        var : torch.Tensor
+            Logvar in vae
+        output : torch.Tensor
+            Outputs in earch timestep of an encoder
         """
         mu, log_var, outputs = self.encoder(input_tensor)
         return mu, log_var, outputs
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        result = self.decoder_input(z)
-        result = result.view(-1, 512, 2, 2)
-        result = self.decoder(result)
-        result = self.final_layer(result)
+        self.decoder(z)
         return result
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:

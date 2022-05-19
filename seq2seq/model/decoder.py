@@ -35,19 +35,24 @@ class CandidateDecoderConfig(BaseModel):
         Number of words in a dictionary (mandatory if using EmbedderType.LANG)
     device : str
         Device used to compute tensors "cuda" or "cpu"
+    max_seq_len : int
+        Longer texts will be trimmed and shorter padded to this value
+    vattn : int
+        If True variational attention will be used
+        If False deterministic attention will be used
     """
 
-    latent_dim: int = 128
-    lstm_hidden_dim: int = 32
-    num_layers_lstm: int = 1
+    latent_dim: int
+    lstm_hidden_dim: int
+    num_layers_lstm: int
     embedding_size: int
-    hidden_dims: list = []
-    bidirectional: bool = True
-    dropout: float = 0.1
+    hidden_dims: list
+    bidirectional: bool
+    dropout: float
     embedder_name: EmbedderType
     num_words: int
-    device: str = "cuda"
-    max_seq_len: int = 256
+    device: str
+    max_seq_len: int
     vattn: bool = True
 
 
@@ -141,11 +146,27 @@ class CandidateDecoder(nn.Module):
         ----------
         prev_token : torch.Tensor
             Previously predicted token by the decoder
+            The tensor of shape [N, E], where:
+            - N is a batch size
+            - E is the embedding size
         prev_hidden : tuple[torch.Tensor, torch.Tensor]
             Previously returned hidden state and cell state of the decoder
-            tuple of tuple (h_n, c_n)
+            The tuple of (h_n, c_n)
+            h_n:
+                Tensor of shape [num_layers, H] where:
+                - num_layers is a number of layers in LSTM
+                - H is hidden size of LSTM
+            c_n:
+                Tensor of shape [num_layers, H] where:
+                - num_layers is a number of layers in LSTM
+                - H is hidden size of LSTM
         encoder_outputs: torch.Tensor
             Outputs of the encoder in given timestamp
+            The tensor of shape [N, L, H * D], where:
+            - N is a batch size
+            - L is the sequence length
+            - H is the hidden size of the LSTM
+            - D is 2 if encoder is bidirectional otherwise 1
         """
         # query @ W.T
         attn_weights = F.softmax(
@@ -171,7 +192,7 @@ class CandidateDecoder(nn.Module):
         attn_applied = attn_applied.view(-1, encoder_outputs.shape[-1])
 
         # https://github.com/HareeshBahuleyan/tf-var-attention
-        # To check
+        # To check if is applied correctly
         if self.config.vattn:
             attn_mu = self.attn_mu(attn_applied)
             attn_var = self.attn_var(attn_applied)
@@ -185,32 +206,46 @@ class CandidateDecoder(nn.Module):
 
         return attn, attn_weights
 
-    def init_hidden_cell(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
-        return torch.zeros(
-            self.config.num_layers_lstm,
-            batch_size,
-            self.config.lstm_hidden_dim,
-            device=self.config.device,
-        ), torch.zeros(
-            self.config.num_layers_lstm,
-            batch_size,
-            self.config.lstm_hidden_dim,
-            device=self.config.device,
-        )
-
     def _latent_to_embedding_size(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        Transforms latent vector to the shape of the embedding using linear layers
+
+        Parameters
+        ----------
+        z : torch.Tensor
+            The tensor of shape [N, Z], where:
+            - N is a batch size
+            - Z is a dimension if the latent space
+        Returns
+        -------
+        output : torch.Tensor
+            The tensor of shape [N, E], where:
+            - N is a batch size
+            - E is an embedding size
+        """
         for _, layer in enumerate(self.fcs):
-            z = layer(z)
+            z = self.dropout(self.relu(layer(z)))
         return z
 
     @staticmethod
     def _reparameterize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
-        Will a single z be enough ti compute the expectation
-        for the loss??
-        :param mu: (Tensor) Mean of the latent Gaussian
-        :param logvar: (Tensor) Standard deviation of the latent Gaussian
-        :return:
+        Use reparameterization trick https://arxiv.org/abs/1312.6114
+
+        Parameters
+        ----------
+        mu : torch.Tensor
+            Mean of the latent Gaussian
+            Any shape, same as the shape of logvar
+        logvar : torch.Tensor
+            Logarithm of standard deviation of the latent Gaussian
+            Any shape, same as the shape of mu
+
+        Returns
+        -------
+        z : torch.Tensor
+            Latent vector sampled from the distribution
+            Shape is the same as the shape of mu and logvar
         """
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
@@ -230,22 +265,53 @@ class CandidateDecoder(nn.Module):
         ----------
         prev_token : torch.Tensor
             Previously predicted token by the decoder
+            If feed_latent is True the tensor of shape [N, Z], where:
+            - N is a batch size
+            - Z is a dimension of the lantent space
+
+            If feed_latent is False:
+                If self.config.embedder_name == EmbedderType.LANG:
+                    The tensor of shape [N, 1], where:
+                    - N is a batch size
+                If self.config.embedder_name != EmbedderType.LANG:
+                    The tensor of shape [N, E], where:
+                    - N is a batch size
+                    - E is the embedding size
+
         prev_hidden : tuple[torch.Tensor, torch.Tensor]
             Previously returned hidden state and cell state of the decoder
             tuple of tuple (h_n, c_n)
+            h_n:
+                Tensor of shape [num_layers, H] where:
+                - num_layers is a number of layers in LSTM
+                - H is a hidden size of LSTM
+            c_n:
+                Tensor of shape [num_layers, H] where:
+                - num_layers is a number of layers in LSTM
+                - H is a hidden size of LSTM
+
         encoder_outputs: torch.Tensor
-            Outputs of the encoder in given timestamp
-        feed_latent : torch.Tensor
-            If true prev_token is a latent vector and should be transformed to appropriate size
+            Outputs of the encoder in given timestamp padded to max_seq_len
+            The tensor of shape [N, L, H * D], where:
+            - N is a batch size
+            - L is a max sequence length
+            - H is a hidden size of the LSTM
+            - D is 2 if encoder is bidirectional otherwise 1
+
+        feed_latent : bool
+            - If True, prev_token is a latent vector and should
+                be transformed to appropriate size
+            - If False, prev_token consists of word embeddings
         """
 
         if feed_latent:
             prev_token = self._latent_to_embedding_size(prev_token)
 
-        if not feed_latent and self.embedding:
+        if not feed_latent and self.config.embedder_name == EmbedderType.LANG:
             if isinstance(prev_token, PackedSequence):
                 prev_token, _ = pad_packed_sequence(prev_token, batch_first=True)
-            prev_token = self.embedding(prev_token[:, :, 0])
+            prev_token = self.embedding(prev_token)
+            prev_token = prev_token.squeeze(dim=1)
 
         output, attn_weights = self._calc_attn(prev_token, prev_hidden, encoder_outputs)
 
@@ -253,3 +319,39 @@ class CandidateDecoder(nn.Module):
         output, prev_hidden = self.lstm(output.unsqueeze(dim=1), prev_hidden)
         output = F.log_softmax(self.out(output.squeeze(dim=1)), dim=1)
         return output, prev_hidden, attn_weights
+
+    def init_hidden_cell(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Inits hidden cells filled with zeros
+
+        Parameters
+        ----------
+        batch_size : int
+            Batch size
+
+        Returns
+        -------
+        hidden_state : torch.Tensor
+            Hidden state for lstm filled with zeros
+            Tensor of shape [num_layers, N, H] where:
+            - num_layers is a number of layers in LSTM
+            - N is a batch size
+            - H is hidden size of LSTM
+        hidden_state : torch.Tensor
+            Cell state for lstm filled with zeros
+            Tensor of shape [num_layers, H] where:
+            - num_layers is a number of layers in LSTM
+            - N is a batch size
+            - H is hidden size of LSTM
+        """
+        return torch.zeros(
+            self.config.num_layers_lstm,
+            batch_size,
+            self.config.lstm_hidden_dim,
+            device=self.config.device,
+        ), torch.zeros(
+            self.config.num_layers_lstm,
+            batch_size,
+            self.config.lstm_hidden_dim,
+            device=self.config.device,
+        )
