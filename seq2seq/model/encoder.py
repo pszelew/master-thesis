@@ -132,13 +132,28 @@ class CandidateEncoder(nn.Module):
             - N is a batch size
             - Z is a latent space dimension
 
-        output : torch.Tensor
+        outputs : torch.Tensor
             Outputs in each timestep of an encoder
             The tensor of shape [N, L, H * D], where:
             - N is a batch size
             - L is the sequence length
             - H is the hidden size of the LSTM
             - D is 2 if encoder is bidirectional otherwise 1
+
+        (hn, cn) : tupl[torch.Tensor, torch.Tensor]
+            hn : torch.Tensor
+                Hidden state for lstm filled with zeros
+                The tensor of shape [D * num_layers, N, H], where:
+                - D is 2 if bidirectional otherwise 1
+                - num_layers is a number of layers in LSTM
+                - N is a batch size
+                - H is hidden size of LSTM
+            cn : torch.Tensor
+                Cell state for lstm filled with zeros
+                The tensor of shape [D * num_layers, N, H], where:
+                - D is 2 if bidirectional otherwise 1
+                - num_layers is a number of layers in LSTM
+                - H is hidden size of LSTM
         """
         if self.embedding:
             if isinstance(input_tensor, PackedSequence):
@@ -156,7 +171,7 @@ class CandidateEncoder(nn.Module):
         mu = self.fc_mu(X)
         logvar = self.fc_var(X)
 
-        return mu, logvar, output
+        return mu, logvar, output, (hn, cn)
 
     def init_hidden_cell(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -166,13 +181,14 @@ class CandidateEncoder(nn.Module):
         -------
         hidden_state : torch.Tensor
             Hidden state for lstm filled with zeros
-            The tensor of shape [D * num_layers, H], where:
+            The tensor of shape [D * num_layers, N, H], where:
             - D is 2 if bidirectional otherwise 1
             - num_layers is a number of layers in LSTM
+            - N is a batch size
             - H is hidden size of LSTM
-        hidden_state : torch.Tensor
+        cell_state : torch.Tensor
             Cell state for lstm filled with zeros
-            The tensor of shape [D * num_layers, H], where:
+            The tensor of shape [D * num_layers, N, H], where:
             - D is 2 if bidirectional otherwise 1
             - num_layers is a number of layers in LSTM
             - H is hidden size of LSTM

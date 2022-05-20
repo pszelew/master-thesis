@@ -17,7 +17,7 @@ vae:
     latent_dim: 16
   encoder:
     # Number of layers in lstm network
-    num_layers_lstm: 64
+    num_layers_lstm: 8
     # Hidden linear layers in encoder. Applied between LSTM and (fc_mu, fc_var)
     hidden_dims: [64]
     # Dropout applies to outputs of hidden layers

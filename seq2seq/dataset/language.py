@@ -13,12 +13,12 @@ class Lang:
     """Class managing laguage used in seq2seq model"""
 
     def __init__(self, name: str):
-        self.sos_token = 0
-        self.eos_token = 1
+        # self.sos_token = 0
+        self.eos_token = 0
         self.name = name
         self.word2index = {}
         self.word2count = {}
-        self.index2word = {self.sos_token: "SOS", self.eos_token: "EOS"}
+        self.index2word = {self.eos_token: "EOS"}
 
     @property
     def n_words(self):

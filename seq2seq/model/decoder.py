@@ -40,6 +40,10 @@ class CandidateDecoderConfig(BaseModel):
     vattn : int
         If True variational attention will be used
         If False deterministic attention will be used
+    bypassing : bool
+        Bypass mechanism is described here https://arxiv.org/pdf/1712.08207.pdf
+        If True bypassing is enabled
+        Otherwise disabled
     """
 
     latent_dim: int
@@ -53,7 +57,8 @@ class CandidateDecoderConfig(BaseModel):
     num_words: int
     device: str
     max_seq_len: int
-    vattn: bool = True
+    vattn: bool
+    bypassing: bool
 
 
 class CandidateDecoder(nn.Module):
@@ -153,12 +158,14 @@ class CandidateDecoder(nn.Module):
             Previously returned hidden state and cell state of the decoder
             The tuple of (h_n, c_n)
             h_n:
-                Tensor of shape [num_layers, H] where:
+                Tensor of shape [num_layers, N, H] where:
                 - num_layers is a number of layers in LSTM
+                - N is a batch size
                 - H is hidden size of LSTM
             c_n:
-                Tensor of shape [num_layers, H] where:
+                Tensor of shape [num_layers, N, H] where:
                 - num_layers is a number of layers in LSTM
+                - N is a batch size
                 - H is hidden size of LSTM
         encoder_outputs: torch.Tensor
             Outputs of the encoder in given timestamp
@@ -167,6 +174,19 @@ class CandidateDecoder(nn.Module):
             - L is the sequence length
             - H is the hidden size of the LSTM
             - D is 2 if encoder is bidirectional otherwise 1
+
+        Returns
+        -------
+        attn : torch.Tensor
+            Final attention tensor. To be used as input of the LSTM unit
+            The tensor of shape [N, H], where:
+            - N is a batch size
+            - H is a hidden dimension of the LSTM units
+        attn_weights : torch.Tensor
+            Weights calculated using attention mechanism
+            The tensor of shape [N, L], where:
+            - N is a batch size
+            - L is the max sequence length
         """
         # query @ W.T
         attn_weights = F.softmax(
@@ -196,14 +216,13 @@ class CandidateDecoder(nn.Module):
         if self.config.vattn:
             attn_mu = self.attn_mu(attn_applied)
             attn_var = self.attn_var(attn_applied)
-            attn_applied = self._reparameterize(attn_mu, attn_var)
+            attn_applied = self.reparameterize(attn_mu, attn_var)
 
         output = torch.cat(
             (prev_token, attn_applied.view(-1, encoder_outputs.shape[-1])), 1
         )
 
         attn = self.attn_combine(output)
-
         return attn, attn_weights
 
     def _latent_to_embedding_size(self, z: torch.Tensor) -> torch.Tensor:
@@ -228,7 +247,7 @@ class CandidateDecoder(nn.Module):
         return z
 
     @staticmethod
-    def _reparameterize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    def reparameterize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
         Use reparameterization trick https://arxiv.org/abs/1312.6114
 
@@ -257,7 +276,7 @@ class CandidateDecoder(nn.Module):
         prev_hidden: tuple[torch.Tensor, torch.Tensor],
         encoder_outputs: torch.Tensor,
         feed_latent: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward method of the decoder
 
@@ -280,14 +299,16 @@ class CandidateDecoder(nn.Module):
 
         prev_hidden : tuple[torch.Tensor, torch.Tensor]
             Previously returned hidden state and cell state of the decoder
-            tuple of tuple (h_n, c_n)
+            tuple of tensors (h_n, c_n)
             h_n:
-                Tensor of shape [num_layers, H] where:
+                Tensor of shape [num_layers, N, H] where:
                 - num_layers is a number of layers in LSTM
+                - N is a batch size
                 - H is a hidden size of LSTM
             c_n:
-                Tensor of shape [num_layers, H] where:
+                Tensor of shape [num_layers, N, H] where:
                 - num_layers is a number of layers in LSTM
+                - N is a batch size
                 - H is a hidden size of LSTM
 
         encoder_outputs: torch.Tensor
@@ -302,6 +323,31 @@ class CandidateDecoder(nn.Module):
             - If True, prev_token is a latent vector and should
                 be transformed to appropriate size
             - If False, prev_token consists of word embeddings
+
+        Returns
+        -------
+        output : torch.Tensor
+            The tensor of shape [N, n_words], where:
+            - N is a batch size
+            - n_words is the number of words in a language dictionary
+        hidden : tuple[torch.Tensor, torch.Tensor]
+            Hidden state of the LSTM network
+            tuple of tensors (h_n, c_n)
+            h_n is the hidden state of the LSTM unit:
+                Tensor of shape [num_layers, N, H] where:
+                - num_layers is a number of layers in LSTM
+                - N is a batch size
+                - H is a hidden size of LSTM
+            c_n is the cell state:
+                Tensor of shape [num_layers, N, H] where:
+                - num_layers is a number of layers in LSTM
+                - N is a batch size
+                - H is a hidden size of LSTM
+        attn_weights : torch.Tensor
+            Weights calculated using attention mechanism
+            The tensor of shape [N, L], where:
+            - N is a batch size
+            - L is the max sequence length
         """
 
         if feed_latent:
@@ -316,9 +362,9 @@ class CandidateDecoder(nn.Module):
         output, attn_weights = self._calc_attn(prev_token, prev_hidden, encoder_outputs)
 
         output = F.relu(output)
-        output, prev_hidden = self.lstm(output.unsqueeze(dim=1), prev_hidden)
+        output, hidden = self.lstm(output.unsqueeze(dim=1), prev_hidden)
         output = F.log_softmax(self.out(output.squeeze(dim=1)), dim=1)
-        return output, prev_hidden, attn_weights
+        return output, hidden, attn_weights
 
     def init_hidden_cell(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """

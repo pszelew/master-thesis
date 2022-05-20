@@ -7,3 +7,4 @@ class GeneralConfig(BaseModel):
     data_path: str
     batch_size: int
     max_seq_len: int
+    device: str
