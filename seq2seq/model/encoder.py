@@ -1,8 +1,8 @@
-from typing import Union, Optional
+from typing import Optional
 
 import torch
 from torch import nn
-from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from pydantic import BaseModel
 
 from model.embedder import EmbedderType
@@ -18,8 +18,6 @@ class CandidateEncoderConfig(BaseModel):
         Hidden dim in encoder lstm network
     num_layers_lstm : int
         Number of layers in encoder lstm network
-    embedding_size : int
-        Size of word embeddings
     hidden_dims : list
         Hidden dimensions of linear layers in encoder lstm
     bidirectional : bool
@@ -29,22 +27,18 @@ class CandidateEncoderConfig(BaseModel):
         Dropout added after linear layers
     embedder_name : EmbedderType
         A name of a technique to create word embeddings
-    num_words : Optional[int]
-        Number of words in a dictionary (mandatory if using EmbedderType.LANG)
-    device : str
-        Device used to compute tensors "cuda" or "cpu"
     """
 
     latent_dim: int
     lstm_hidden_dim: int
     num_layers_lstm: int
-    embedding_size: int
     hidden_dims: list
     bidirectional: bool
     dropout: float
     embedder_name: EmbedderType
-    num_words: Optional[int]
-    device: str
+
+    class Config:
+        use_enum_values = True
 
 
 class CandidateEncoder(nn.Module):
@@ -52,30 +46,30 @@ class CandidateEncoder(nn.Module):
     Class generating mu and logvar for a token in a sequence
     """
 
-    def __init__(self, config: CandidateEncoderConfig):
+    def __init__(
+        self,
+        config: CandidateEncoderConfig,
+        embedding_size: int,
+        embedding: Optional[nn.Embedding] = None,
+    ):
         """
         config : CandidateEncoderConfig
             Configuration for an encoder
         """
         super(CandidateEncoder, self).__init__()
         self.config = config
-        self.embedding = None
+        self.embedding_size = embedding_size
+        self.embedding = embedding
 
         if self.config.embedder_name == EmbedderType.LANG:
             assert (
-                self.config.num_words
-            ), "No num_words passed. It is mandatory if using EmbedderType.LANG"
-            self.embedding = (
-                nn.Embedding(self.config.num_words, self.config.embedding_size)
-                if self.config.embedder_name == EmbedderType.LANG
-                else None
-            )
+                self.embedding is not None
+            ), "No embedding layer passed. It is mandatory if using EmbedderType.LANG"
 
         self.lstm = nn.LSTM(
-            input_size=self.config.embedding_size,
+            input_size=self.embedding_size,
             hidden_size=self.config.lstm_hidden_dim,
             num_layers=self.config.num_layers_lstm,
-            batch_first=True,
             bidirectional=self.config.bidirectional,
         )
 
@@ -103,17 +97,22 @@ class CandidateEncoder(nn.Module):
         self.fc_mu = nn.Linear(fc_mu_in_size, self.config.latent_dim)
         self.fc_var = nn.Linear(fc_mu_in_size, self.config.latent_dim)
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
     def forward(
         self,
-        input_tensor: Union[torch.Tensor, PackedSequence],
+        input_tensor: torch.Tensor,
+        input_lengths: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Encode input
 
         Parameters
         ----------
-        input_tensor : Union[torch.Tensor, PackedSequence]
-            Input of the encoder. Can be tensor od PackedSequence
+        input_tensor : torch.Tensor
+            Input of the encoder
             The tensor of shape [N, L, D], where:
             - N is a batch size
             - L is max sequence length
@@ -156,20 +155,28 @@ class CandidateEncoder(nn.Module):
                 - H is hidden size of LSTM
         """
         if self.embedding:
-            if isinstance(input_tensor, PackedSequence):
-                input_tensor, _ = pad_packed_sequence(input_tensor, batch_first=True)
             input_tensor = self.embedding(input_tensor[:, :, 0])
 
+        input_tensor = pack_padded_sequence(input_tensor, input_lengths)
+
         output, (hn, cn) = self.lstm(input_tensor)
-        if isinstance(output, PackedSequence):
-            output, _ = pad_packed_sequence(output, batch_first=True)
-        X = output[:, -1, :]
+
+        output, _ = pad_packed_sequence(output)
+
+        X = output[-1, :, :]
         for i, _ in enumerate(self.fcs):
             X = self.fcs[i](X)
             X = self.dropout(self.relu(X))
 
         mu = self.fc_mu(X)
         logvar = self.fc_var(X)
+
+        # Sum bidirectional outputs, to reduce dimensionality to
+        # [L, N, lstm_hidden_dim]
+        output = (
+            output[:, :, : self.config.lstm_hidden_dim]
+            + output[:, :, self.config.lstm_hidden_dim :]
+        )
 
         return mu, logvar, output, (hn, cn)
 
@@ -197,10 +204,10 @@ class CandidateEncoder(nn.Module):
             self.config.num_layers_lstm * (1 + self.config.bidirectional),
             batch_size,
             self.config.lstm_hidden_dim,
-            device=self.config.device,
+            device=self.device,
         ), torch.zeros(
             self.config.num_layers_lstm * (1 + self.config.bidirectional),
             batch_size,
             self.config.lstm_hidden_dim,
-            device=self.config.device,
+            device=self.device,
         )

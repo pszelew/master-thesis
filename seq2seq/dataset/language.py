@@ -9,16 +9,17 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 
-class Lang:
+class Vocabulary:
     """Class managing laguage used in seq2seq model"""
 
     def __init__(self, name: str):
         # self.sos_token = 0
-        self.eos_token = 0
+        self.pad_token = 0
+        self.eos_token = 1
         self.name = name
         self.word2index = {}
         self.word2count = {}
-        self.index2word = {self.eos_token: "EOS"}
+        self.index2word = {self.pad_token: "PAD", self.eos_token: "EOS"}
 
     @property
     def n_words(self):

@@ -2,20 +2,39 @@
 
 vae:
   general:
+    # ------ Train specific -----
+    # Save every n batches  
+    save_every: 50
+    # Log loss every n batches
+    log_every: 50
+    # Print to console
+    print_console: False
+    # Batch size
+    batch_size: 3
+    # Train epochs. n_iters is train_epochs * dataset.size / batch_size
+    train_epochs: 128
+    # Encoder learning rate
+    encoder_lr: 0.00001
+    # Decoder learning rate
+    decoder_lr: 0.00005
+    # Path to dataset file
+    data_path: data/extracted_sellers.json
+    # Path for training checkpoints
+    checkpoints_dir: checkpoints/
+
+    # ------ Shared config -----
     # One of lang/fassttext/roberta
     embedder_name: roberta
-    # path to dataset file
-    data_path: data/extracted_sellers.json
-    batch_size: 3
     # Longer texts will be trimmed and shorter padded to this value
     max_seq_len: 256
-    # If True encoder will be bidirectional.
-    bidirectional: True
     # Hidden dims of LSTMs used in encoder and decoder
     lstm_hidden_dim: 64
     # Shape of a latent vector in VAE
     latent_dim: 16
+
   encoder:
+    # If True encoder will be bidirectional.
+    bidirectional: True
     # Number of layers in lstm network
     num_layers_lstm: 8
     # Hidden linear layers in encoder. Applied between LSTM and (fc_mu, fc_var)
@@ -32,5 +51,50 @@ vae:
     # If true variational attention will be used instead of a deterministic one
     # https://arxiv.org/pdf/1712.08207.pdf
     vattn: True
+    # dot / general / concat
+    # https://pytorch.org/tutorials/beginner/chatbot_tutorial.html#run-model
+    attn_method: general
     # Bypass mechanism is described here https://arxiv.org/pdf/1712.08207.pdf
     bypassing: False
+  trainer:
+    # 'standard' is a basic beta vae. Uses beta param
+    # 'capacity' is is a beta with with controlled capacity increase proposed in
+    # uses gamma param. Currently not scheduled
+    loss_type: standard
+    # Used only if loss_type is capacity
+    # https://arxiv.org/pdf/1804.03599.pdf
+    max_capacity: 25
+    # Used only if loss_type is capacity
+    # https://arxiv.org/pdf/1804.03599.pdf
+    capacity_max_iter: 100000
+    # Used only if loss_type is standard
+    beta: 1
+    # Used only if loss_type is capacity
+    gamma: 1000.0
+    # batch_size/num_of_examples?
+    # https://github.com/AntixK/PyTorch-VAE/issues/11
+    # If 1 it is disabled
+    kld_weight: 1
+    # This is gamma a for variational attention
+    # https://arxiv.org/pdf/1712.08207.pdf
+    gamma_a: 1
+    # From paper https://arxiv.org/pdf/1903.10145.pdf
+    use_beta_cycle: True
+    # Number of cycles
+    # From paper https://arxiv.org/pdf/1903.10145.pdf
+    n_cycle: 10
+    # Ratio of increasing Beta in each cycle. 
+    # From paper https://arxiv.org/pdf/1903.10145.pdf
+    ratio_increase: 0.25
+    # Ratio of zero Beta in each cycle. 
+    # From paper https://arxiv.org/pdf/1903.10145.pdf
+    ratio_zero: 0.25
+    # Free bit vae loss
+    # from paper https://arxiv.org/pdf/1606.04934.pdf
+    free_bit_kl: True
+    # Clip value for gradients
+    clip: 50.0
+    # Lambda value from paper https://arxiv.org/pdf/1606.04934.pdf
+    lambda_target_kl: 1.0
+
+

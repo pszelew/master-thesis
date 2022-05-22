@@ -7,7 +7,7 @@ from transformers import RobertaModel, RobertaTokenizer
 import fasttext
 import fasttext.util
 
-from dataset.language import Lang
+from dataset.language import Vocabulary
 
 
 class EmbedderType(str, Enum):
@@ -17,9 +17,11 @@ class EmbedderType(str, Enum):
 
 
 class Embedder:
-    def __init__(self, model_name: EmbedderType, lang: Lang, device: str = "cuda"):
+    def __init__(
+        self, model_name: EmbedderType, vocab: Vocabulary, device: str = "cuda"
+    ):
         self.model_name = model_name
-        self.lang = lang
+        self.vocab = vocab
         self.device = device
 
         if self.model_name == EmbedderType.FASTTEXT:
@@ -28,10 +30,16 @@ class Embedder:
             self.model = RobertaModel.from_pretrained("roberta-base")
             self.tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
-    def __call__(self, text: str, pooled: Optional[bool] = False):
+    def __call__(
+        self, text: str, pooled: Optional[bool] = False
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        seq = self.tensorFromSentence(text)
         if self.model_name == EmbedderType.FASTTEXT:
-            return torch.tensor(
-                [self.model.get_word_vector(word) for word in text.split()]
+            return (
+                torch.tensor(
+                    [self.model.get_word_vector(word) for word in text.split()]
+                ),
+                seq,
             )
         if self.model_name == EmbedderType.ROBERTA:
             encoded_input = self.tokenizer(text, return_tensors="pt")
@@ -39,9 +47,9 @@ class Embedder:
                 self.model(**encoded_input).pooler_output
                 if pooled
                 else self.model(**encoded_input).last_hidden_state.squeeze(dim=0)
-            )
+            ), seq
 
-        return self.tensorFromSentence(text)
+        return seq, seq
 
     @property
     def size(self) -> int:
@@ -51,16 +59,16 @@ class Embedder:
             encoded_input = self.tokenizer("dummy text", return_tensors="pt")
             return self.model(**encoded_input).last_hidden_state.shape[-1]
 
-        return self.lang.n_words
+        return self.vocab.n_words
 
     def indexesFromSentence(self, sentence):
         return [
-            self.lang.word2index[word]
+            self.vocab.word2index[word]
             for word in sentence.split(" ")
-            if word in self.lang.word2index
+            if word in self.vocab.word2index
         ]
 
     def tensorFromSentence(self, sentence):
         indexes = self.indexesFromSentence(sentence)
-        indexes.append(self.lang.eos_token)
+        indexes.append(self.vocab.eos_token)
         return torch.tensor(indexes, dtype=torch.long, device=self.device).view(-1, 1)

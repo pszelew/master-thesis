@@ -14,7 +14,7 @@ from tqdm import tqdm
 from logger import get_logger
 from model.embedder import EmbedderType, Embedder
 from .utils import normalizeString, get_lang_detector, detect_language
-from .language import Lang
+from .language import Vocabulary
 
 
 tqdm.pandas()
@@ -110,7 +110,7 @@ class SellersDataset(torch.utils.data.Dataset):
             "description_str",
         ]
 
-        self.lang = Lang("eng")
+        self.vocab = Vocabulary("eng")
         Language.factory("language_detector", func=get_lang_detector)
         self.en_nlp.add_pipe("language_detector", last=True)
         if dataset_path:
@@ -123,7 +123,16 @@ class SellersDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        
+        Returns
+        -------
+        embedded : torch.Tensor
+
+        target : torch.Tensor
+
+        """
         return self.embedder(self._create_textual_decription(idx))
 
     def prepare_dataset(self):
@@ -147,7 +156,7 @@ class SellersDataset(torch.utils.data.Dataset):
         # Prepare language for seq2seq model
         self._prepare_language(self.dataset)
         # Prepare embedder
-        self.embedder = Embedder(self.embedder_name, self.lang, device=self.device)
+        self.embedder = Embedder(self.embedder_name, self.vocab, device=self.device)
 
     # ------------------------------------------------------
     # ------------------ Languages -------------------------
@@ -345,7 +354,7 @@ class SellersDataset(torch.utils.data.Dataset):
     def _prepare_language(self, dataset: pd.DataFrame) -> None:
         for key in self.string_keys:
             logger.info(f"Adding language for {key}")
-            dataset[key].progress_apply(self.lang.add_sentence)
+            dataset[key].progress_apply(self.vocab.add_sentence)
 
     # ------------------------------------------------------
     # ------------------------------------------------------

@@ -1,19 +1,38 @@
 import re
 import unicodedata
 
-from torch import tensor
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
+import torch
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, PackedSequence
 from spacy_langdetect import LanguageDetector
 
 
-def pad_collate(batch):
-    text_lens = [len(x) for x in batch]
-    descriptions_pad = pad_sequence(batch, batch_first=False, padding_value=0)
-    descriptions_pad = pack_padded_sequence(
-        descriptions_pad, text_lens, batch_first=False, enforce_sorted=False
-    )
+def binaryMatrix(l, padding_value: str):
+    m = []
+    for i, seq in enumerate(l):
+        m.append([])
+        for token in seq:
+            if token == padding_value:
+                m[i].append(0)
+            else:
+                m[i].append(1)
+    return m
 
-    return descriptions_pad
+
+def pad_collate(padding_value: int):
+    def _pad_collate(batch: tuple[PackedSequence, torch.Tensor]):
+        batch.sort(key=lambda x: len(x[0]), reverse=True)
+        inputs, targets = zip(*batch)
+        input_lengths = torch.Tensor([len(x) for x in inputs])
+
+        # Zero pad input
+        input_pad = pad_sequence(inputs, padding_value=padding_value)
+        max_target_length = max([len(x) for x in targets])
+        target_pad = pad_sequence(targets, padding_value=padding_value)
+        mask = binaryMatrix(target_pad, padding_value)
+        mask = torch.BoolTensor(mask)
+        return input_pad, input_lengths, target_pad, mask, max_target_length
+
+    return _pad_collate
 
 
 def unicodeToAscii(s):
