@@ -14,6 +14,7 @@ class GeneralConfig(BaseModel):
     log_every: int
     print_console: bool
     save_every: int
+    latent_dim: int
 
     class Config:
         use_enum_values = True

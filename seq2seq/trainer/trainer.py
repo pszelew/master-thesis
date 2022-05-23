@@ -14,6 +14,7 @@ import os
 from enum import Enum
 from typing import Optional
 from datetime import datetime
+from regex import F
 import yaml
 
 import torch
@@ -51,23 +52,26 @@ class BetaVAELossType(str, Enum):
 
 
 class TrainerConfig(BaseModel):
-    max_capacity: int  # Maximum capacity from https://arxiv.org/pdf/1804.03599.pdf
-    # Maximum of iterations in beta vae
-    capacity_max_iter: int
     # 'standard' is a basic beta vae
     # 'capacity' is is a beta with with controlled capacity increase proposed in
     loss_type: BetaVAELossType
-    # Used if loss_type is standard
-    beta: int
-    # Used if loss_type is capacity
-    gamma: float
     # batch_size/num_of_examples?
     # https://github.com/AntixK/PyTorch-VAE/issues/11
     # If 1 it is disabled
     kld_weight: int
+    # Used if loss_type is standard
+    beta: int
+    # Used if loss_type is capacity
+    gamma: float
+    # Maximum capacity from https://arxiv.org/pdf/1804.03599.pdf
+    max_capacity: int
+    # Maximum of iterations in beta vae
+    capacity_max_iter: int
+
     # This is gamma a for variational attention
     # https://arxiv.org/pdf/1712.08207.pdf
     gamma_a: float
+
     # From paper https://arxiv.org/pdf/1903.10145.pdf
     use_beta_cycle: bool
     # Number of cycles
@@ -79,13 +83,47 @@ class TrainerConfig(BaseModel):
     # Ratio of increasing Beta in each cycle.
     # From paper https://arxiv.org/pdf/1903.10145.pdf
     ratio_zero: float
+
     # If true use free bit vae loss
     # from paper https://arxiv.org/pdf/1606.04934.pdf
     free_bit_kl: bool
     # Lambda value from paper https://arxiv.org/pdf/1606.04934.pdf
     lambda_target_kl: float
+
     # Clip value for gradients
+    # https://www.deeplearningbook.org/
     clip: float
+
+    # https://arxiv.org/abs/1808.04339v2
+    # If true then use multitask and adversarial losses from
+    use_disentangled_loss: bool
+    # lambda coeficient weighting multitask loss for skills
+    lambda_mult_skills: float
+    # lambda coeficient weighting multitask loss for education
+    lambda_mult_education: float
+    # lambda coeficient weighting multitask loss for languages
+    lambda_mult_languages: float
+    # lambda coeficient weighting adversarial loss for skills
+    lambda_adv_skills: float
+    # lambda coeficient weighting adversarial loss for education
+    lambda_adv_education: float
+    # lambda coeficient weighting adversarial loss for education
+    lambda_adv_languages: float
+    # Skills dim
+    # [:skills_dim] dimensions should code skills
+    # if trainer.use_disentangled_loss == True
+    skills_dim: int
+    # Education dim
+    # [skills_dim:skills_dim+education_dim] dimensions should code education
+    #  if trainer.use_disentangled_loss == True
+    education_dim: int
+    # Languages dim
+    # [skills_dim + education_dim:skills_dim + education_dim + languages_dim]
+    # dimensions should code education if trainer.use_disentangled_loss == True
+    languages_dim: int
+    # The rest is for content
+    # [skills_dim + education_dim + languages_dim:latent_dim]
+    # content_dim = latent_dim - (skills_dim + education_dim + languages_dim)
 
     class Config:
         use_enum_values = True
@@ -161,8 +199,74 @@ class BetaVaeTrainer:
         writer: SummaryWriter,
     ):
         logger.info("Initializing BetaVaeTrainer...")
+
+        self.config = config
+        self.general_config = general_config
+
+        self.dataloader = dataloader
         # VAE network
         self.vae = vae
+
+        # Classifiers modeling disentanglement. Inspired by
+        # https://arxiv.org/abs/1808.04339v2
+        targets = ["skills", "education", "languages"]
+        sources = ["skills", "education", "languages", "content"]
+        latent_sizes = {
+            "skills": [self.config.skills_dim, len(self.dataloader.dataset.skills_map)],
+            "education": [
+                self.config.education_dim,
+                len(self.dataloader.dataset.major_map)
+                * len(self.dataloader.dataset.degree_map),
+            ],
+            "languages": [
+                self.config.languages_dim,
+                len(self.dataloader.dataset.langs_map)
+                * self.dataloader.dataset.num_lang_levels,
+            ],
+            "content": [
+                self.general_config.latent_dim
+                - (
+                    self.config.skills_dim
+                    + self.config.education_dim
+                    + self.config.languages_dim
+                ),
+                0,
+            ],
+        }
+
+        self.multitask_classifiers = nn.ModuleDict(
+            {
+                target: nn.Linear(latent_sizes[target][0], latent_sizes[target][1])
+                for target in targets
+            }
+        )
+        # Retreiving target using source. They should fail :)
+        self.adversarial_classifiers = nn.ModuleDict(
+            {
+                target: nn.ModuleDict(
+                    {
+                        source: nn.Linear(
+                            latent_sizes[source][0], latent_sizes[target][1]
+                        )
+                        for source in sources
+                    }
+                )
+                for target in targets
+            }
+        )
+
+        # Predicting skills using education vector
+        self.adversarial_classifier_skills_education = nn.Linear(
+            self.config.education_dim, len(self.dataloader.dataset.skills_map)
+        )
+        # Predicting skills using languages vector
+        self.adversarial_classifier_skills_education = nn.Linear(
+            self.config.languages_dim, len(self.dataloader.dataset.skills_map)
+        )
+        # Predicting skills using rest of the vector
+        self.adversarial_classifier_skills_education = nn.Linear(
+            self.config.education_dim, len(self.dataloader.dataset.skills_map)
+        )
 
         # Optimizers
         self.encoder_optimizer = encoder_optimizer
@@ -170,9 +274,7 @@ class BetaVaeTrainer:
 
         # Negative log likelihood
         self.reconstruction_loss = maskNLLLoss
-        self.general_config = general_config
-        self.config = config
-        self.dataloader = dataloader
+
         self.writer = writer
 
         self.c_max = torch.Tensor([self.config.max_capacity]).to(self.vae.device)

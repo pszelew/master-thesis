@@ -63,6 +63,7 @@ class SellersDataset(torch.utils.data.Dataset):
             "tamil": 18,
             "ukrainian": 19,
         }
+        self.num_lang_levels = 5
         # TODO
         self.major_map = {
             "": 0,  # it is a special case for not parsed education information
@@ -193,7 +194,7 @@ class SellersDataset(torch.utils.data.Dataset):
             Returns vector of languages and its string representation
             for a row id pd.DataFrame
             """
-            languages_vector = torch.zeros(len(self.langs_map), 5)  # Languages vector
+            languages_vector = torch.zeros(len(self.langs_map), self.num_lang_levels)  # Languages vector
             languages_texts = []
 
             if not row:
@@ -220,7 +221,7 @@ class SellersDataset(torch.utils.data.Dataset):
                         idx = 4
                     languages_vector[self.langs_map[language]][idx] = 1
                     languages_texts.append(language + " " + level)
-            return languages_vector, normalizeString(", ".join(languages_texts))
+            return languages_vector.flatten(), normalizeString(", ".join(languages_texts))
 
         temp_data["languages_vec"], temp_data["languages_str"] = zip(
             *temp_data["languages"].progress_apply(vectorize_languages)
@@ -257,7 +258,7 @@ class SellersDataset(torch.utils.data.Dataset):
                 major = major_matches[0] if major_matches else ""
                 education_vector[self.major_map[major]][self.degree_map[degree]] = 1
                 education_texts.append(degree + " " + major)
-            return education_vector, normalizeString(", ".join(education_texts))
+            return education_vector.flatten(), normalizeString(", ".join(education_texts))
 
         temp_data["education_vec"], temp_data["education_str"] = zip(
             *temp_data["education"].progress_apply(vectorize_education)
@@ -291,7 +292,7 @@ class SellersDataset(torch.utils.data.Dataset):
                     skills_vector[self.skills_map[skill_match]][0] = 1
 
                 skills_texts.append(skill)
-            return skills_vector, normalizeString(", ".join(skills_texts))
+            return skills_vector.flatten(), normalizeString(", ".join(skills_texts))
 
         temp_data["skills_vec"], temp_data["skills_str"] = zip(
             *temp_data["skills"].progress_apply(vectorize_skills)

@@ -26,11 +26,13 @@ vae:
     # One of lang/fassttext/roberta
     embedder_name: roberta
     # Longer texts will be trimmed and shorter padded to this value
+    # Currently not used!!!!
     max_seq_len: 256
     # Hidden dims of LSTMs used in encoder and decoder
     lstm_hidden_dim: 64
     # Shape of a latent vector in VAE
     latent_dim: 16
+
 
   encoder:
     # If True encoder will be bidirectional.
@@ -60,24 +62,25 @@ vae:
     # 'standard' is a basic beta vae. Uses beta param
     # 'capacity' is is a beta with with controlled capacity increase proposed in
     # uses gamma param. Currently not scheduled
-    loss_type: standard
-    # Used only if loss_type is capacity
-    # https://arxiv.org/pdf/1804.03599.pdf
-    max_capacity: 25
-    # Used only if loss_type is capacity
-    # https://arxiv.org/pdf/1804.03599.pdf
-    capacity_max_iter: 100000
-    # Used only if loss_type is standard
-    beta: 1
-    # Used only if loss_type is capacity
-    gamma: 1000.0
+    loss_type: standard    
     # batch_size/num_of_examples?
     # https://github.com/AntixK/PyTorch-VAE/issues/11
     # If 1 it is disabled
     kld_weight: 1
+    # Used only if loss_type is standard
+    beta: 1
+    # Used only if loss_type is capacity
+    gamma: 1000.0
+    # https://arxiv.org/pdf/1804.03599.pdf
+    # Used only if loss_type is capacity
+    max_capacity: 25
+    # Used only if loss_type is capacity
+    capacity_max_iter: 100000
+
     # This is gamma a for variational attention
     # https://arxiv.org/pdf/1712.08207.pdf
     gamma_a: 1
+    
     # From paper https://arxiv.org/pdf/1903.10145.pdf
     use_beta_cycle: True
     # Number of cycles
@@ -89,12 +92,46 @@ vae:
     # Ratio of zero Beta in each cycle. 
     # From paper https://arxiv.org/pdf/1903.10145.pdf
     ratio_zero: 0.25
+
     # Free bit vae loss
     # from paper https://arxiv.org/pdf/1606.04934.pdf
     free_bit_kl: True
-    # Clip value for gradients
-    clip: 50.0
     # Lambda value from paper https://arxiv.org/pdf/1606.04934.pdf
     lambda_target_kl: 1.0
+
+    # Clip value for gradients
+    # https://www.deeplearningbook.org/
+    clip: 50.0
+
+    # https://arxiv.org/abs/1808.04339v2
+    # If true then use multitask and adversarial losses from 
+    use_disentangled_loss: True
+    # lambda coeficient weighting multitask loss for skills
+    lambda_mult_skills: 1.0
+    # lambda coeficient weighting multitask loss for education
+    lambda_mult_education: 1.0
+    # lambda coeficient weighting multitask loss for languages
+    lambda_mult_languages: 1.0
+    # lambda coeficient weighting adversarial loss for skills
+    lambda_adv_skills: 1.0
+    # lambda coeficient weighting adversarial loss for education
+    lambda_adv_education: 1.0
+    # lambda coeficient weighting adversarial loss for education
+    lambda_adv_languages: 1.0
+    # Skills dim
+    # [:skills_dim] dimensions should code skills
+    # if trainer.use_disentangled_loss == True
+    skills_dim: 2
+    # Education dim
+    # [skills_dim:skills_dim+education_dim] dimensions should code education
+    #  if trainer.use_disentangled_loss == True
+    education_dim: 2
+    # Languages dim
+    # [skills_dim + education_dim:skills_dim + education_dim + languages_dim]
+    # dimensions should code education if trainer.use_disentangled_loss == True
+    languages_dim: 2
+    # The rest is for content
+    # [skills_dim + education_dim + languages_dim:latent_dim]
+    # content_dim = latent_dim - (skills_dim + education_dim + languages_dim)
 
 
