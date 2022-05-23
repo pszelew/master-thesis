@@ -19,9 +19,13 @@ def binaryMatrix(l, padding_value: str):
 
 
 def pad_collate(padding_value: int):
-    def _pad_collate(batch: tuple[PackedSequence, torch.Tensor]):
+    def _pad_collate(
+        batch: tuple[
+            torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+        ]
+    ):
         batch.sort(key=lambda x: len(x[0]), reverse=True)
-        inputs, targets = zip(*batch)
+        inputs, targets, target_skills, target_education, target_languages = zip(*batch)
         input_lengths = torch.Tensor([len(x) for x in inputs])
 
         # Zero pad input
@@ -30,7 +34,17 @@ def pad_collate(padding_value: int):
         target_pad = pad_sequence(targets, padding_value=padding_value)
         mask = binaryMatrix(target_pad, padding_value)
         mask = torch.BoolTensor(mask)
-        return input_pad, input_lengths, target_pad, mask, max_target_length
+
+        return (
+            input_pad,
+            input_lengths,
+            target_pad,
+            mask,
+            max_target_length,
+            torch.stack(target_skills),
+            torch.stack(target_education),
+            torch.stack(target_languages),
+        )
 
     return _pad_collate
 
@@ -59,3 +73,11 @@ def detect_language(nlp, document) -> str:
     doc = nlp(document)
     detected_language = doc._.language
     return detected_language["language"]
+
+
+def get_sentiment_words(path: str):
+    with open(file=path, mode="r", encoding="utf-8") as sentiment_words_file:
+        words = sentiment_words_file.readlines()
+    words = set(word.strip() for word in words)
+
+    return words

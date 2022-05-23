@@ -278,9 +278,7 @@ class CandidateVAE(nn.Module):
 
         if not self.decoder.config.bypassing:
             # Reinitialize hidden state of the encoder
-            encoder_hidden_state = self.decoder.init_hidden_cell(
-                self.general_config.batch_size
-            )
+            encoder_hidden_state = self.decoder.init_hidden_cell(z.shape[0])
 
         decoder_hidden_state = encoder_hidden_state
 

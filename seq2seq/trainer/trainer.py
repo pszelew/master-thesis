@@ -7,6 +7,7 @@ https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html
 https://pytorch.org/tutorials/beginner/chatbot_tutorial.html
 https://github.com/AntixK/PyTorch-VAE
 https://github.com/ChunyuanLI/Optimus
+https://github.com/vineetjohn/linguistic-style-transfer
 
 """
 
@@ -16,9 +17,11 @@ from typing import Optional
 from datetime import datetime
 from regex import F
 import yaml
+from collections import defaultdict
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from pydantic import BaseModel
@@ -97,18 +100,21 @@ class TrainerConfig(BaseModel):
     # https://arxiv.org/abs/1808.04339v2
     # If true then use multitask and adversarial losses from
     use_disentangled_loss: bool
-    # lambda coeficient weighting multitask loss for skills
-    lambda_mult_skills: float
-    # lambda coeficient weighting multitask loss for education
-    lambda_mult_education: float
-    # lambda coeficient weighting multitask loss for languages
-    lambda_mult_languages: float
+    # lambda coeficient weighting multitask loss for skills and
     # lambda coeficient weighting adversarial loss for skills
+    lambda_mul_skills: float
     lambda_adv_skills: float
+    adv_skills_lr: float
+    # lambda coeficient weighting multitask loss for education and
     # lambda coeficient weighting adversarial loss for education
+    lambda_mul_education: float
     lambda_adv_education: float
+    adv_education_lr: float
     # lambda coeficient weighting adversarial loss for education
+    # lambda coeficient weighting multitask loss for languages
+    lambda_mul_languages: float
     lambda_adv_languages: float
+    adv_languages_lr: float
     # Skills dim
     # [:skills_dim] dimensions should code skills
     # if trainer.use_disentangled_loss == True
@@ -174,14 +180,35 @@ def frange_cycle_zero_linear(
     return L
 
 
-def maskNLLLoss(reconstructed: torch.Tensor, target: torch.Tensor, mask: torch.Tensor):
-    n_total = mask.sum()
-    cross_entropy = -torch.log(
-        torch.gather(reconstructed, 1, target.view(-1, 1)).squeeze(1)
-    )
+class MaskNLLLoss(nn.Module):
+    """Mask Negative log likelihood loss"""
 
-    loss = cross_entropy.masked_select(mask).mean()
-    return loss, n_total.item()
+    def __init__(self):
+        super().__init__()
+
+    def forward(
+        self, reconstructed: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
+    ):
+        n_total = mask.sum()
+        cross_entropy = -torch.log(
+            torch.gather(reconstructed, 1, target.view(-1, 1)).squeeze(1)
+        )
+
+        loss = cross_entropy.masked_select(mask).mean()
+        return loss, n_total.item()
+
+
+class HLoss(nn.Module):
+    """
+    Entropy of the tensor
+    If we want to maximalize it, just substract it instead of adding to total loss
+    """
+
+    def __init__(self):
+        super(HLoss, self).__init__()
+
+    def forward(self, x):
+        return (F.softmax(x, dim=1) * F.log_softmax(x, dim=1)).sum()
 
 
 class BetaVaeTrainer:
@@ -191,8 +218,6 @@ class BetaVaeTrainer:
     def __init__(
         self,
         vae: CandidateVAE,
-        encoder_optimizer: torch.optim.Optimizer,
-        decoder_optimizer: torch.optim.Optimizer,
         general_config: GeneralConfig,
         config: TrainerConfig,
         dataloader: DataLoader,
@@ -209,71 +234,92 @@ class BetaVaeTrainer:
 
         # Classifiers modeling disentanglement. Inspired by
         # https://arxiv.org/abs/1808.04339v2
-        targets = ["skills", "education", "languages"]
-        sources = ["skills", "education", "languages", "content"]
-        latent_sizes = {
-            "skills": [self.config.skills_dim, len(self.dataloader.dataset.skills_map)],
-            "education": [
-                self.config.education_dim,
-                len(self.dataloader.dataset.major_map)
-                * len(self.dataloader.dataset.degree_map),
-            ],
-            "languages": [
-                self.config.languages_dim,
-                len(self.dataloader.dataset.langs_map)
+        self.disentangled_targets = {
+            "skills": {
+                "latent_dim": self.config.skills_dim,
+                "output_dim": self.dataloader.dataset.bow_vocab.n_words,
+                "indexes": (0, self.config.skills_dim),
+                "lambda_mul": self.config.lambda_mul_skills,
+                "lambda_adv": self.config.lambda_adv_skills,
+                "lr": self.config.adv_skills_lr,
+            },
+            "education": {
+                "latent_dim": self.config.education_dim,
+                "output_dim": self.dataloader.dataset.bow_vocab.n_words,
+                "indexes": (
+                    self.config.skills_dim,
+                    self.config.skills_dim + self.config.education_dim,
+                ),
+                "lambda_mul": self.config.lambda_mul_education,
+                "lambda_adv": self.config.lambda_adv_education,
+                "lr": self.config.adv_education_lr,
+            },
+            "languages": {
+                "latent_dim": self.config.languages_dim,
+                "output_dim": len(self.dataloader.dataset.langs_map)
                 * self.dataloader.dataset.num_lang_levels,
-            ],
-            "content": [
-                self.general_config.latent_dim
-                - (
+                "indexes": (
+                    self.config.skills_dim + self.config.education_dim,
                     self.config.skills_dim
                     + self.config.education_dim
-                    + self.config.languages_dim
+                    + self.config.languages_dim,
                 ),
-                0,
-            ],
+                "lambda_mul": self.config.lambda_mul_languages,
+                "lambda_adv": self.config.lambda_adv_languages,
+                "lr": self.config.adv_languages_lr,
+            },
         }
 
         self.multitask_classifiers = nn.ModuleDict(
             {
-                target: nn.Linear(latent_sizes[target][0], latent_sizes[target][1])
-                for target in targets
+                target: nn.Linear(
+                    self.disentangled_targets[target]["latent_dim"],
+                    self.disentangled_targets[target]["output_dim"],
+                ).to(self.vae.device)
+                for target in self.disentangled_targets
             }
         )
-        # Retreiving target using source. They should fail :)
+        # Retreiving target using all except target. Classifiers should fail :)
         self.adversarial_classifiers = nn.ModuleDict(
             {
-                target: nn.ModuleDict(
-                    {
-                        source: nn.Linear(
-                            latent_sizes[source][0], latent_sizes[target][1]
-                        )
-                        for source in sources
-                    }
-                )
-                for target in targets
+                target: nn.Linear(
+                    self.general_config.latent_dim
+                    - self.disentangled_targets[target]["latent_dim"],
+                    self.disentangled_targets[target]["output_dim"],
+                ).to(self.vae.device)
+                for target in self.disentangled_targets
             }
         )
 
-        # Predicting skills using education vector
-        self.adversarial_classifier_skills_education = nn.Linear(
-            self.config.education_dim, len(self.dataloader.dataset.skills_map)
+        self.adversarial_optimizers = {
+            target: torch.optim.Adam(
+                self.adversarial_classifiers[target].parameters(),
+                lr=self.disentangled_targets[target]["lr"],
+            )
+            for target in self.disentangled_targets
+        }
+
+        encoder_optimizer = torch.optim.Adam(
+            [*self.vae.encoder.parameters(), *self.multitask_classifiers.parameters()],
+            lr=self.general_config.encoder_lr,
         )
-        # Predicting skills using languages vector
-        self.adversarial_classifier_skills_education = nn.Linear(
-            self.config.languages_dim, len(self.dataloader.dataset.skills_map)
+        decoder_optimizer = torch.optim.Adam(
+            self.vae.decoder.parameters(), lr=self.general_config.decoder_lr
         )
-        # Predicting skills using rest of the vector
-        self.adversarial_classifier_skills_education = nn.Linear(
-            self.config.education_dim, len(self.dataloader.dataset.skills_map)
-        )
+
+        # Sigmid used by adversarial classifiers
+        self.sigm = nn.Sigmoid()
 
         # Optimizers
         self.encoder_optimizer = encoder_optimizer
         self.decoder_optimizer = decoder_optimizer
 
-        # Negative log likelihood
-        self.reconstruction_loss = maskNLLLoss
+        # Masked negative log likelihood
+        self.reconstruction_loss = MaskNLLLoss()
+
+        self.entropy_loss = HLoss()
+        # Disentangled loss - cross entropy loss
+        self.crossentropy_loss = nn.CrossEntropyLoss()
 
         self.writer = writer
 
@@ -305,6 +351,9 @@ class BetaVaeTrainer:
         gamma: Optional[float] = None,
         attn_mu: Optional[torch.Tensor] = None,
         attn_var: Optional[torch.Tensor] = None,
+        multitask_outputs: dict[str, torch.Tensor] = {},
+        adversarial_outputs: dict[str, torch.Tensor] = {},
+        adversarial_targets: dict[str, torch.Tensor] = {},
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
 
         # reconstruction loss
@@ -315,9 +364,9 @@ class BetaVaeTrainer:
         # kld_loss = torch.mean(
         #     -0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0
         # )
-        kld_loss = -0.5 * (1 + log_var - mu ** 2 - log_var.exp())
         # Implementationf from
         # https://github.com/ChunyuanLI/Optimus/blob/master/code/examples/big_ae/modules/vae.py
+        kld_loss = -0.5 * (1 + log_var - mu ** 2 - log_var.exp())
         if self.config.free_bit_kl:
             kld_mask = (kld_loss > self.config.lambda_target_kl).float()
             kld_loss = kld_mask * kld_loss
@@ -364,7 +413,56 @@ class BetaVaeTrainer:
         else:
             raise ValueError("Undefined loss type.")
 
-        return loss, recons_loss, kld_loss, kld_attn_loss, n_total
+        # Disentangled losses. If not dicts then loss is disabled by config
+        # https://arxiv.org/abs/1808.04339v2
+
+        multitask_losses = defaultdict(None)
+        adversary_entropy_losses = defaultdict(None)
+        adversary_losses = defaultdict(None)
+
+        if multitask_outputs and adversarial_outputs:
+            for key in multitask_outputs:
+                # First calc multitask losses
+                multitask_loss = self.disentangled_targets[key][
+                    "lambda_mul"
+                ] * self.crossentropy_loss(
+                    multitask_outputs[key], adversarial_targets[key].to(self.vae.device)
+                )
+
+                # Calculate entropy loss
+                # "It should be emphasized that, when we train the adversary,
+                # the gradient is not propagated back to the autoencoder ..."
+                adversary_entropy = self.disentangled_targets[key][
+                    "lambda_adv"
+                ] * self.entropy_loss(adversarial_outputs[key])
+
+                # Calculate loss for adversarial_classifier
+                # "It should be emphasized that, when we train the adversary,
+                # the gradient is not propagated back to the autoencoder ..."
+                adversary_loss = self.crossentropy_loss(
+                    adversarial_outputs[key],
+                    adversarial_targets[key].to(self.vae.device),
+                )
+
+                loss += multitask_loss
+                loss -= adversary_entropy
+                # Idk ask someone who is pytorch master
+                loss += adversary_loss
+
+                multitask_losses[key] = multitask_loss
+                adversary_entropy_losses[key] = adversary_entropy
+                adversary_losses[key] = adversary_loss
+
+        return (
+            loss,
+            recons_loss,
+            kld_loss,
+            kld_attn_loss,
+            n_total,
+            multitask_losses,
+            adversary_entropy_losses,
+            adversary_losses,
+        )
 
     def train_step(
         self,
@@ -373,6 +471,9 @@ class BetaVaeTrainer:
         target_tensor: torch.Tensor,
         mask: torch.Tensor,
         max_target_length: int,
+        target_skills: torch.Tensor,
+        target_education: torch.Tensor,
+        target_languages: torch.Tensor,
     ):
         """
         The train method enables us to calculate loss
@@ -409,7 +510,17 @@ class BetaVaeTrainer:
         recons_loss = 0
         kld_loss = 0
         kld_attn_loss = 0
+        multitask_losses_sum = defaultdict(lambda: 0)
+        adversary_entropy_losses_sum = defaultdict(lambda: 0)
+        adversary_losses_sum = defaultdict(lambda: 0)
+
         gamma = self.config.gamma
+
+        adversarial_targets = {
+            "skills": target_skills,
+            "education": target_education,
+            "languages": target_languages,
+        }
 
         # Beta scheduling
         if self.config.use_beta_cycle:
@@ -421,14 +532,34 @@ class BetaVaeTrainer:
         self.encoder_optimizer.zero_grad()
         self.decoder_optimizer.zero_grad()
 
-        # Enable train mode, important for Dropuot or BatchNormself.num_iter
+        # Enable train mode, important for Dropout or BatchNormself.num_iter
         self.vae.encoder.train()
         self.vae.decoder.train()
+        self.multitask_classifiers.train()
+        self.adversarial_classifiers.train()
 
         mu, log_var, encoder_outputs, encoder_hidden_state = self.vae.encode(
             input_tensor, input_lengths
         )
         z = self.vae.reparameterize(mu, log_var)
+
+        # multitask_classifiers and adversarial_classifiers
+
+        multitask_outputs: dict = {}
+        adversarial_outputs: dict = {}
+
+        if self.config.use_disentangled_loss:
+            for key in self.multitask_classifiers:
+                index_start, index_end = self.disentangled_targets[key]["indexes"]
+                multitask_outputs[key] = self.sigm(
+                    self.multitask_classifiers[key](mu[:, index_start:index_end])
+                )
+                adversarial_outputs[key] = self.sigm(
+                    self.adversarial_classifiers[key](
+                        torch.cat((z[:, :index_start], mu[:, index_end:]), dim=1)
+                    )
+                )
+
         decoder_input = z
         feed_latent = True
 
@@ -469,6 +600,9 @@ class BetaVaeTrainer:
                 batch_kld_loss,
                 batch_kld_attn_loss,
                 n_total,
+                multitask_losses,
+                adversary_entropy_losses,
+                adversary_losses,
             ) = self.loss_function(
                 decoder_output,
                 target_tensor[idx],
@@ -479,12 +613,21 @@ class BetaVaeTrainer:
                 gamma,
                 attn_mu,
                 attn_var,
+                multitask_outputs,
+                adversarial_outputs,
+                adversarial_targets,
             )
 
             loss += batch_loss
             recons_loss += batch_recons_loss
             kld_loss += batch_kld_loss
             kld_attn_loss += batch_kld_attn_loss
+
+            for key in multitask_losses:
+                multitask_losses_sum[key] += multitask_losses[key]
+                adversary_entropy_losses_sum[key] += adversary_entropy_losses[key]
+                adversary_losses_sum[key] += adversary_losses[key]
+
         loss.backward()
 
         # Clip gradients: gradients are modified in place
@@ -493,10 +636,14 @@ class BetaVaeTrainer:
 
         self.encoder_optimizer.step()
         self.decoder_optimizer.step()
+        for _, optimizer in self.adversarial_optimizers.items():
+            optimizer.step()
 
         # Enable evaluation, important for Dropuot or BatchNorm
         self.vae.encoder.eval()
         self.vae.decoder.eval()
+        self.multitask_classifiers.eval()
+        self.adversarial_classifiers.eval()
 
         return (
             loss.item() / n_total,
@@ -504,16 +651,14 @@ class BetaVaeTrainer:
             kld_loss.item() / n_total,
             kld_attn_loss.item() / n_total,
             beta,
+            {k: v / n_total for (k, v) in multitask_losses_sum.items()},
+            {k: v / n_total for (k, v) in adversary_entropy_losses_sum.items()},
+            {k: v / n_total for (k, v) in adversary_losses_sum.items()},
         )
 
     def fit(self):
         # Initializations
-        logging_losses: dict = {
-            "loss": 0,
-            "recons_loss": 0,
-            "kld_loss": 0,
-            "kld_attn_loss": 0,
-        }
+        logging_losses = defaultdict(lambda: 0)
 
         timestamp = datetime.now().strftime("%d_%m_%y_%H_%M_%S")
 
@@ -532,70 +677,81 @@ class BetaVaeTrainer:
                 target_pad,
                 mask,
                 max_target_length,
+                target_skills,
+                target_education,
+                target_languages,
             ) in enumerate(tqdm(self.dataloader)):
                 input_pad = input_pad.to(self.vae.device)
                 target_pad = target_pad.to(self.vae.device)
                 mask = mask.to(self.vae.device)
                 input_lengths = input_lengths.to("cpu")
 
-                loss, recons_loss, kld_loss, kld_attn_loss, beta = self.train_step(
+                (
+                    loss,
+                    recons_loss,
+                    kld_loss,
+                    kld_attn_loss,
+                    beta,
+                    multitask_losses_sum,
+                    adversary_entropy_losses_sum,
+                    adversary_losses_sum,
+                ) = self.train_step(
                     input_pad,
                     input_lengths,
                     target_pad,
                     mask,
                     max_target_length,
+                    target_skills,
+                    target_education,
+                    target_languages,
                 )
                 logging_losses["loss"] += loss
                 logging_losses["recons_loss"] += recons_loss
                 logging_losses["kld_loss"] += kld_loss
                 logging_losses["kld_attn_loss"] += kld_attn_loss
 
+                logging_losses["skills_mul"] += multitask_losses_sum["skills"]
+                logging_losses["education_mul"] += multitask_losses_sum["education"]
+                logging_losses["languages_mul"] += multitask_losses_sum["languages"]
+
+                logging_losses[
+                    "skills_adversary_entropy_loss"
+                ] += adversary_entropy_losses_sum["skills"]
+                logging_losses[
+                    "education_adversary_entropy_loss"
+                ] += adversary_entropy_losses_sum["education"]
+                logging_losses[
+                    "languages_adversary_entropy_loss"
+                ] += adversary_entropy_losses_sum["languages"]
+
+                logging_losses["skills_adversary_loss"] += adversary_losses_sum[
+                    "skills"
+                ]
+                logging_losses["education_adversary_loss"] += adversary_losses_sum[
+                    "education"
+                ]
+                logging_losses["languages_adversary_loss"] += adversary_losses_sum[
+                    "languages"
+                ]
+
                 # Print and log progress
                 if self.num_iter % self.general_config.log_every == 0:
-
                     # Average values
-                    logging_losses["loss"] = (
-                        logging_losses["loss"] / self.general_config.log_every
-                    )
-                    logging_losses["recons_loss"] = (
-                        logging_losses["recons_loss"] / self.general_config.log_every
-                    )
-                    logging_losses["kld_loss"] = (
-                        logging_losses["kld_loss"] / self.general_config.log_every
-                    )
-                    logging_losses["kld_attn_loss"] = (
-                        logging_losses["kld_attn_loss"] / self.general_config.log_every
-                    )
+                    for k in logging_losses:
+                        logging_losses[k] /= self.general_config.log_every
 
-                    self.writer.add_scalars(
-                        main_tag=f"{timestamp} loss",
-                        tag_scalar_dict={"train": logging_losses["loss"]},
-                        global_step=self.num_iter,
-                    )
-
-                    self.writer.add_scalars(
-                        main_tag=f"{timestamp} recons_loss",
-                        tag_scalar_dict={"train": logging_losses["recons_loss"]},
-                        global_step=self.num_iter,
-                    )
-
-                    self.writer.add_scalars(
-                        main_tag=f"{timestamp} kld_loss",
-                        tag_scalar_dict={"train": logging_losses["kld_loss"]},
-                        global_step=self.num_iter,
-                    )
-
-                    self.writer.add_scalars(
-                        main_tag=f"{timestamp} kld_attn_loss",
-                        tag_scalar_dict={"train": logging_losses["kld_attn_loss"]},
-                        global_step=self.num_iter,
-                    )
+                        self.writer.add_scalars(
+                            main_tag=f"{timestamp} {k}",
+                            tag_scalar_dict={"train": logging_losses[k]},
+                            global_step=self.num_iter,
+                        )
 
                     self.writer.add_scalars(
                         main_tag=f"{timestamp} beta",
                         tag_scalar_dict={"train": beta},
                         global_step=self.num_iter,
                     )
+
                     if self.general_config.print_console:
                         logger.info(
                             "Iteration: {}; Percent complete: {:.1f}%; Average loss: {:.4f};"
@@ -619,10 +775,8 @@ class BetaVaeTrainer:
                                 beta,
                             )
                         )
-                    logging_losses["loss"] = 0
-                    logging_losses["recons_loss"] = 0
-                    logging_losses["kld_loss"] = 0
-                    logging_losses["kld_attn_loss"] = 0
+                    for k in logging_losses:
+                        logging_losses[k] = 0
 
                 # Save checkpoint
                 if self.num_iter % self.general_config.save_every == 0:

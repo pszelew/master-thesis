@@ -21,6 +21,11 @@ vae:
     data_path: data/extracted_sellers.json
     # Path for training checkpoints
     checkpoints_dir: checkpoints/
+    # Bag of words - remove stopwords
+    bow_remove_stopwords: True
+    # Bag of words - remove sentiment words
+    # https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html
+    bow_remove_sentiment: True
 
     # ------ Shared config -----
     # One of lang/fassttext/roberta
@@ -106,18 +111,23 @@ vae:
     # https://arxiv.org/abs/1808.04339v2
     # If true then use multitask and adversarial losses from 
     use_disentangled_loss: True
-    # lambda coeficient weighting multitask loss for skills
-    lambda_mult_skills: 1.0
-    # lambda coeficient weighting multitask loss for education
-    lambda_mult_education: 1.0
-    # lambda coeficient weighting multitask loss for languages
-    lambda_mult_languages: 1.0
+    # lambda coeficient weighting multitask loss for skills and
     # lambda coeficient weighting adversarial loss for skills
+    lambda_mul_skills: 1.0
     lambda_adv_skills: 1.0
+    adv_skills_lr: 0.00001
+    # lambda coeficient weighting multitask loss for education and
     # lambda coeficient weighting adversarial loss for education
+    lambda_mul_education: 1.0
     lambda_adv_education: 1.0
+    adv_education_lr: 0.00001
+    # lambda coeficient weighting multitask loss for languages and
     # lambda coeficient weighting adversarial loss for education
+    lambda_mul_languages: 1.0
     lambda_adv_languages: 1.0
+    adv_languages_lr: 0.00001
+    
+    
     # Skills dim
     # [:skills_dim] dimensions should code skills
     # if trainer.use_disentangled_loss == True
