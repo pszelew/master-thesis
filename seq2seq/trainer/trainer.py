@@ -532,6 +532,9 @@ class BetaVaeTrainer:
         self.encoder_optimizer.zero_grad()
         self.decoder_optimizer.zero_grad()
 
+        for _, optimizer in self.adversarial_optimizers.items():
+            optimizer.zero_grad()
+
         # Enable train mode, important for Dropout or BatchNormself.num_iter
         self.vae.encoder.train()
         self.vae.decoder.train()
