@@ -418,7 +418,7 @@ class CandidateDecoder(nn.Module):
             prev_token = self._latent_to_embedding_size(prev_token)
 
         if not feed_latent and self.config.embedder_name == EmbedderType.LANG:
-            prev_token, _ = self.embedding(prev_token)
+            prev_token = self.embedding(prev_token).squeeze(dim=1)
 
         prev_token = prev_token.unsqueeze(dim=0)
         lstm_output, lstm_hidden = self.lstm(prev_token, prev_hidden)
@@ -432,6 +432,8 @@ class CandidateDecoder(nn.Module):
 
         # https://github.com/HareeshBahuleyan/tf-var-attention
         # To check if is applied correctly
+        attn_mu = None
+        attn_var = None
         if self.config.vattn:
             attn_mu = self.attn_mu(context)
             attn_var = self.attn_var(context)

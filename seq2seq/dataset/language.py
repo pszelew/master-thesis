@@ -19,12 +19,9 @@ class Vocabulary:
         self.name = name
         self.word2index = {}
         self.word2count = {}
-        self.index2word = {self.pad_token: "PAD", self.eos_token: "EOS"}
-
-    @property
-    def n_words(self):
-        """Returns the index size"""
-        return len(self.index2word)
+        self.index2word = {self.pad_token: "<pad>", self.eos_token: "</s>"}
+        self.n_words = 2
+        self.trimmed = False
 
     def add_sentence(self, sentence: Optional[str]) -> None:
         """
@@ -49,8 +46,40 @@ class Vocabulary:
             self.word2index[word] = self.n_words
             self.word2count[word] = 1
             self.index2word[self.n_words] = word
+            self.n_words += 1
         else:
             self.word2count[word] += 1
+
+    # Remove words below a certain count threshold
+
+    def trim(self, min_count: int):
+        """Trim words rarer than min_count"""
+        if self.trimmed:
+            return
+        self.trimmed = True
+
+        keep_words = []
+
+        for k, v in self.word2count.items():
+            if v >= min_count:
+                keep_words.append(k)
+
+        logger.info(
+            "keep_words {} / {} = {:.4f}".format(
+                len(keep_words),
+                len(self.word2index),
+                len(keep_words) / len(self.word2index),
+            )
+        )
+
+        # Reinitialize dictionaries
+        self.word2index = {}
+        self.word2count = {}
+        self.index2word = {self.pad_token: "<pad>", self.eos_token: "</s>"}
+        self.n_words = 2  # Count default tokens
+
+        for word in keep_words:
+            self.add_word(word)
 
 
 def get_lang_detector(nlp, name):

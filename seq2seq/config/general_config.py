@@ -1,10 +1,15 @@
+from typing import Optional
 from pydantic import BaseModel
 from model.embedder import EmbedderType
 
 
 class GeneralConfig(BaseModel):
     embedder_name: EmbedderType
-    data_path: str
+    datset_path: str
+    raw_data_path: Optional[str] = None
+    bow_remove_stopwords: bool
+    bow_remove_sentiment: bool
+    trim_tr: int
     checkpoints_dir: str
     batch_size: int
     train_epochs: int

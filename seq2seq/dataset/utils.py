@@ -58,7 +58,7 @@ def unicodeToAscii(s):
 # Lowercase, trim, and remove non-letter characters
 def normalizeString(s):
     s = unicodeToAscii(s.lower().strip())
-    s = re.sub(r"([.,!?-])", r"", s)
+    s = re.sub(r"([.',!?-])", r"", s)
     s = re.sub(r"[^a-zA-Z0-9.',!?]+", r" ", s)
     return s
 

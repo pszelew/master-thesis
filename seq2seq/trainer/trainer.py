@@ -95,6 +95,7 @@ class TrainerConfig(BaseModel):
 
     # Clip value for gradients
     # https://www.deeplearningbook.org/
+    use_clip: bool
     clip: float
 
     # https://arxiv.org/abs/1808.04339v2
@@ -307,9 +308,6 @@ class BetaVaeTrainer:
             self.vae.decoder.parameters(), lr=self.general_config.decoder_lr
         )
 
-        # Sigmid used by adversarial classifiers
-        self.sigm = nn.Sigmoid()
-
         # Optimizers
         self.encoder_optimizer = encoder_optimizer
         self.decoder_optimizer = decoder_optimizer
@@ -421,12 +419,13 @@ class BetaVaeTrainer:
         adversary_losses = defaultdict(None)
 
         if multitask_outputs and adversarial_outputs:
-            for key in multitask_outputs:
+            for key in multitask_outputs:  # print(multitask_outputs[key].shape)
+                # print(adversarial_targets[key].shape)
                 # First calc multitask losses
                 multitask_loss = self.disentangled_targets[key][
                     "lambda_mul"
                 ] * self.crossentropy_loss(
-                    multitask_outputs[key], adversarial_targets[key].to(self.vae.device)
+                    multitask_outputs[key].to("cpu"), adversarial_targets[key].to("cpu")
                 )
 
                 # Calculate entropy loss
@@ -434,7 +433,7 @@ class BetaVaeTrainer:
                 # the gradient is not propagated back to the autoencoder ..."
                 adversary_entropy = self.disentangled_targets[key][
                     "lambda_adv"
-                ] * self.entropy_loss(adversarial_outputs[key])
+                ] * self.entropy_loss(adversarial_outputs[key].to("cpu"))
 
                 # Calculate loss for adversarial_classifier
                 # "It should be emphasized that, when we train the adversary,
@@ -449,15 +448,15 @@ class BetaVaeTrainer:
                 # Idk ask someone who is pytorch master
                 loss += adversary_loss
 
-                multitask_losses[key] = multitask_loss
-                adversary_entropy_losses[key] = adversary_entropy
-                adversary_losses[key] = adversary_loss
+                multitask_losses[key] = multitask_loss.detach()
+                adversary_entropy_losses[key] = adversary_entropy.detach()
+                adversary_losses[key] = adversary_loss.detach()
 
         return (
             loss,
-            recons_loss,
-            kld_loss,
-            kld_attn_loss,
+            recons_loss.detach() if recons_loss else torch.tensor(0),
+            kld_loss.detach() if kld_loss else torch.tensor(0),
+            kld_attn_loss.detach() if kld_attn_loss else torch.tensor(0),
             n_total,
             multitask_losses,
             adversary_entropy_losses,
@@ -554,12 +553,18 @@ class BetaVaeTrainer:
         if self.config.use_disentangled_loss:
             for key in self.multitask_classifiers:
                 index_start, index_end = self.disentangled_targets[key]["indexes"]
-                multitask_outputs[key] = self.sigm(
-                    self.multitask_classifiers[key](mu[:, index_start:index_end])
+                multitask_outputs[key] = self.multitask_classifiers[key](
+                    mu[:, index_start:index_end]
                 )
-                adversarial_outputs[key] = self.sigm(
-                    self.adversarial_classifiers[key](
-                        torch.cat((z[:, :index_start], mu[:, index_end:]), dim=1)
+
+                # "It should be emphasized that, when we train the adversary,
+                # the gradient is not propagated back to the autoencoder ..."
+                # https://arxiv.org/abs/1808.04339v2
+                # TODO check if it applied correctly
+                adversarial_outputs[key] = self.adversarial_classifiers[key](
+                    torch.cat(
+                        (mu.detach()[:, :index_start], mu.detach()[:, index_end:]),
+                        dim=1,
                     )
                 )
 
@@ -633,9 +638,20 @@ class BetaVaeTrainer:
 
         loss.backward()
 
-        # Clip gradients: gradients are modified in place
-        _ = nn.utils.clip_grad_norm_(self.vae.encoder.parameters(), self.config.clip)
-        _ = nn.utils.clip_grad_norm_(self.vae.decoder.parameters(), self.config.clip)
+        if self.config.use_clip:
+            # Clip gradients: gradients are modified in place
+            _ = nn.utils.clip_grad_norm_(
+                self.vae.encoder.parameters(), self.config.clip
+            )
+            _ = nn.utils.clip_grad_norm_(
+                self.vae.decoder.parameters(), self.config.clip
+            )
+            _ = nn.utils.clip_grad_norm_(
+                self.multitask_classifiers.parameters(), self.config.clip
+            )
+            _ = nn.utils.clip_grad_norm_(
+                self.adversarial_classifiers.parameters(), self.config.clip
+            )
 
         self.encoder_optimizer.step()
         self.decoder_optimizer.step()
@@ -671,7 +687,7 @@ class BetaVaeTrainer:
         os.makedirs(checkpoint_path, exist_ok=True)
 
         # Training loop
-        print("Training...")
+        logger.info("Training loop...")
         for epoch in range(self.general_config.train_epochs):
             logger.info(f"Epoch {epoch}/{self.general_config.train_epochs}")
             for local_iter, (
@@ -744,13 +760,13 @@ class BetaVaeTrainer:
                         logging_losses[k] /= self.general_config.log_every
 
                         self.writer.add_scalars(
-                            main_tag=f"{timestamp} {k}",
+                            main_tag=f"{timestamp}/{k}",
                             tag_scalar_dict={"train": logging_losses[k]},
                             global_step=self.num_iter,
                         )
 
                     self.writer.add_scalars(
-                        main_tag=f"{timestamp} beta",
+                        main_tag=f"{timestamp}/beta",
                         tag_scalar_dict={"train": beta},
                         global_step=self.num_iter,
                     )
@@ -778,8 +794,9 @@ class BetaVaeTrainer:
                                 beta,
                             )
                         )
-                    for k in logging_losses:
-                        logging_losses[k] = 0
+                    keys = [k for k in logging_losses.keys()]
+                    for k in keys:
+                        del logging_losses[k]
 
                 # Save checkpoint
                 if self.num_iter % self.general_config.save_every == 0:
@@ -790,6 +807,8 @@ class BetaVaeTrainer:
                             "local_iteration": local_iter,
                             "encoder": self.vae.encoder.state_dict(),
                             "decoder": self.vae.decoder.state_dict(),
+                            "multitask_classifiers": self.multitask_classifiers.state_dict(),
+                            "adversarial_classifiers": self.adversarial_classifiers.state_dict(),
                             "encoder_optimizer": self.encoder_optimizer.state_dict(),
                             "decoder_optimizer": self.decoder_optimizer.state_dict(),
                             "loss": loss,
