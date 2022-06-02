@@ -1,6 +1,9 @@
 seq2seq/model/fasttext
 seq2seq/logs
 seq2seq/data
+seq2seq/data/
+seq2seq/checkpoints/
+seq2seq/tests/
 .ipynb_checkpoints
 __pycache__
 .env
