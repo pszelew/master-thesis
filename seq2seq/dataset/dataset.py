@@ -39,6 +39,7 @@ class SellersDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         dataset_path: str,
+        test_index: str,
         embedder_name: EmbedderType = EmbedderType.LANG,
         raw_data_path: Optional[str] = None,
         device: str = "cuda",
@@ -47,6 +48,7 @@ class SellersDataset(torch.utils.data.Dataset):
         sentiments_path: str = "data/sentiment-words.txt",
         nn_embedding_size: Optional[int] = None,
         trim_tr: int = 3,
+        test_size: int = 1000,
     ):
         """
         Sellers dataset
@@ -63,6 +65,7 @@ class SellersDataset(torch.utils.data.Dataset):
 
         self.meta: dict = {}
         self.dataset_path = dataset_path
+        self.test_index = test_index
         self.raw_data = None
         self.items_path = os.path.join(dataset_path, "items")
         self.en_nlp = spacy.load("en_core_web_sm")
@@ -71,6 +74,7 @@ class SellersDataset(torch.utils.data.Dataset):
         self.nn_embedding_size = nn_embedding_size
         self.stemmer = PorterStemmer()
         self.trim_tr = trim_tr
+        self.test_size = test_size
 
         self.string_keys = [
             "languages_str",
@@ -113,10 +117,7 @@ class SellersDataset(torch.utils.data.Dataset):
             self._create_textual_decription(data_row)
         ), *self._prepare_adversarial_targets(data_row)
 
-    
-    def get_textual_description(
-        self, idx: int
-    ) -> str:
+    def get_textual_description(self, idx: int) -> str:
         """
 
         Returns
@@ -131,8 +132,7 @@ class SellersDataset(torch.utils.data.Dataset):
             data_row = pickle.load(f)
 
         return self._create_textual_decription(data_row)
-    
-    
+
     def prepare_dataset(self, save: bool = True, dropna: bool = True):
         """
         Prepare dataset
@@ -163,7 +163,7 @@ class SellersDataset(torch.utils.data.Dataset):
         self.dataset = self._vectorize_education(self.dataset)
 
         # Filter out those without skills, education or languages
-        
+
         if dropna:
             logger.info("Dropping missing values...")
             len_before = len(self.dataset)
@@ -178,10 +178,6 @@ class SellersDataset(torch.utils.data.Dataset):
                 ]
             )
             logger.info("Dropped %d missing values...", len_before - len(self.dataset))
-        
-        self.dataset = self.dataset.reset_index()
-        self.meta["length"] = len(self.dataset)
-        
 
         # Prepare embedder
         self.embedder = Embedder(
@@ -190,7 +186,7 @@ class SellersDataset(torch.utils.data.Dataset):
             device=self.device,
             nn_embedding_size=self.nn_embedding_size,
         )
-    
+
         self._save_dataset(self.dataset_path)
 
         del self.dataset
@@ -202,7 +198,35 @@ class SellersDataset(torch.utils.data.Dataset):
         shutil.rmtree(os.path.join(save_path, "items"), ignore_errors=True)
         os.makedirs(os.path.join(save_path, "items"), exist_ok=True)
 
+        test_index_file = os.path.join(
+            os.path.split(self.raw_data_path)[0], self.test_index
+        )
+        if os.path.exists(test_index_file):
+            with open(test_index_file, "rb") as f:
+                self.test_dataset_index = pickle.load(f)
+
+            logger.info(
+                f"Sampling {self.test_size} examples for testing using {test_index_file} file..."
+            )
+            self.test_dataset = self.dataset.loc[self.test_dataset_index]
+
+        else:
+            logger.info(f"Sampling {self.test_size} examples for testing...")
+            self.test_dataset = self.dataset.sample(self.test_size, random_state=42)
+            with open(test_index_file, "wb") as f:
+                pickle.dump(self.test_dataset.index, f)
+
+        logger.info(
+            f"Removing {len(self.test_dataset.index)} test examples from train dataset..."
+        )
+        self.dataset = self.dataset.drop(self.test_dataset.index)
+        logger.info(
+            f"Done! Removed {len(self.test_dataset.index)} test examples from train dataset"
+        )
+
         self.dataset = self.dataset.reset_index()
+        self.test_dataset = self.test_dataset.reset_index()
+
         self.meta["length"] = len(self.dataset)
 
         with open(os.path.join(save_path, "meta.json"), "w") as f:
@@ -216,14 +240,26 @@ class SellersDataset(torch.utils.data.Dataset):
                 os.path.join(self.items_path, f"document_{i:05}.pickle")
             )
 
+        self.test_dataset.to_pickle(os.path.join(save_path, "test_dataset.pickle"))
+
         with open(os.path.join(save_path, "vocab.pickle"), "wb") as f:
             pickle.dump(self.vocab, f)
         with open(os.path.join(save_path, "bow_vocab.pickle"), "wb") as f:
             pickle.dump(self.bow_vocab, f)
+
         logger.info(f"Done: Saved dataset in {save_path}")
 
     def load_dataset(self):
         logger.info(f"Loading dataset {self.dataset_path}...")
+
+        self.test_dataset = pd.read_pickle(
+            os.path.join(self.dataset_path, "test_dataset.pickle")
+        )
+
+        with open(
+            os.path.join(os.path.split(self.raw_data_path)[0], self.test_index), "rb"
+        ) as f:
+            self.test_dataset_index = pickle.load(f)
 
         with open(os.path.join(self.dataset_path, "meta.json")) as f:
             self.meta = json.load(f)
@@ -389,7 +425,7 @@ class SellersDataset(torch.utils.data.Dataset):
                 words /= words_sum
             return words.flatten()
 
-        temp_data["education_vec"] = temp_data["education_str"].progress_apply(
+        temp_data["education_vec"] = temp_data["education"].progress_apply(
             vectorize_education
         )
 
@@ -444,9 +480,7 @@ class SellersDataset(torch.utils.data.Dataset):
                 words /= words.sum()
             return words.flatten()
 
-        temp_data["skills_vec"] = temp_data["skills_str"].progress_apply(
-            vectorize_skills
-        )
+        temp_data["skills_vec"] = temp_data["skills"].progress_apply(vectorize_skills)
         return temp_data
 
     # # ------------------------------------------------------
@@ -477,7 +511,9 @@ class SellersDataset(torch.utils.data.Dataset):
     # # ------------- Merged description ---------------------
     # # ------------------------------------------------------
 
-    def _create_textual_decription(self, data_row: dict) -> str:
+    def _create_textual_decription(
+        self, data_row: dict, rng: Optional[np.random.Generator] = None
+    ) -> str:
         """
         Create textual description using:
             - languages_str,
@@ -485,15 +521,63 @@ class SellersDataset(torch.utils.data.Dataset):
             - skills_str,
             - description_str.
         """
+
+        rng = rng if rng else np.random
+
         # Augment skills
         data_row["skills_str"] = (
-            np.random.choice(
-                ["", "skills ", "my skills ", "my skills are ", "to my skills belong"],
-                p=[0.6, 0.1, 0.1, 0.1, 0.1],
+            rng.choice(
+                [
+                    "",
+                    "skills ",
+                    "my skills ",
+                    "my skills are ",
+                    "to my skills belong ",
+                    "i know ",
+                ],
+                p=[0.5, 0.1, 0.1, 0.1, 0.1, 0.1],
             )
-            + data_row["skills_str"] if data_row["skills_str"] else ""
-            + np.random.choice(["", " are my skills"], p=[0.9, 0.1])
+            + data_row["skills_str"]
+            if data_row["skills_str"]
+            else "" + rng.choice(["", " are my skills"], p=[0.9, 0.1])
         )
+
+        # Augment education
+        data_row["education_str"] = (
+            rng.choice(
+                [
+                    "",
+                    "education ",
+                    "my education ",
+                    "my education is ",
+                    "to my education belong ",
+                    "i have studied ",
+                ],
+                p=[0.5, 0.1, 0.1, 0.1, 0.1, 0.1],
+            )
+            + data_row["education_str"]
+            if data_row["education_str"]
+            else "" + rng.choice(["", " are my education"], p=[0.9, 0.1])
+        )
+
+        # Augment languages
+        data_row["languages_str"] = (
+            rng.choice(
+                [
+                    "",
+                    "languages ",
+                    "i speak ",
+                    "i know ",
+                    "to my languages belong ",
+                    "my language skills ",
+                ],
+                p=[0.5, 0.1, 0.1, 0.1, 0.1, 0.1],
+            )
+            + data_row["languages_str"]
+            if data_row["languages_str"]
+            else "" + rng.choice(["", " are my languages"], p=[0.9, 0.1])
+        )
+
         in_desc = [
             normalizeString(data_row[key_str])
             for key_str in self.string_keys
@@ -519,7 +603,9 @@ class SellersDataset(torch.utils.data.Dataset):
         for key in self.string_keys:
             logger.info(f"Adding language for {key}")
             dataset[key].progress_apply(self.vocab.add_sentence)
+        logger.info(f"Trimming rare words with threshold {self.trim_tr}...")
         self.vocab.trim(self.trim_tr)
+        logger.info(f"Done! Trimming rare words with threshold {self.trim_tr}")
 
     # ------------------------------------------------------
     # ------------------------------------------------------

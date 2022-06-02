@@ -6,6 +6,7 @@ from model.embedder import EmbedderType
 class GeneralConfig(BaseModel):
     embedder_name: EmbedderType
     datset_path: str
+    test_index: str
     raw_data_path: Optional[str] = None
     bow_remove_stopwords: bool
     bow_remove_sentiment: bool

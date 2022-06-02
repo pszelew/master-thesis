@@ -147,14 +147,33 @@ def save_config_yaml(
     yaml_to_save = {
         "vae": {
             "general": general_config.dict(),
-            "encoder_config": encoder_config.dict(),
-            "decoder_config": decoder_config.dict(),
-            "trainer_config": trainer_config.dict(),
+            "encoder": encoder_config.dict(),
+            "decoder": decoder_config.dict(),
+            "trainer": trainer_config.dict(),
         }
     }
 
     with open(out_path, "w") as file:
         file.write(yaml.dump(yaml_to_save))
+
+
+def get_config_yaml(
+    general_config: GeneralConfig,
+    encoder_config: CandidateEncoderConfig,
+    decoder_config: CandidateDecoderConfig,
+    trainer_config: TrainerConfig,
+):
+
+    yaml_to_save = {
+        "vae": {
+            "general": general_config.dict(),
+            "encoder": encoder_config.dict(),
+            "decoder": decoder_config.dict(),
+            "trainer": trainer_config.dict(),
+        }
+    }
+
+    return yaml_to_save
 
 
 def frange_cycle_zero_linear(
@@ -201,8 +220,8 @@ class MaskNLLLoss(nn.Module):
 
 class HLoss(nn.Module):
     """
-    Entropy of the tensor
-    If we want to maximalize it, just substract it instead of adding to total loss
+    The negative entropy of the tensor
+    If we want to maximalize the entropy, just minimalize the negative entropy
     """
 
     def __init__(self):
@@ -353,6 +372,9 @@ class BetaVaeTrainer:
         adversarial_outputs: dict[str, torch.Tensor] = {},
         adversarial_targets: dict[str, torch.Tensor] = {},
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # Adversary_loss will be added separately
+        total_positive_loss = 0
+        total_adversary_loss = 0
 
         # reconstruction loss
         recons_loss, n_total = self.reconstruction_loss(decoder_output, target, mask)
@@ -365,6 +387,7 @@ class BetaVaeTrainer:
         # Implementationf from
         # https://github.com/ChunyuanLI/Optimus/blob/master/code/examples/big_ae/modules/vae.py
         kld_loss = -0.5 * (1 + log_var - mu ** 2 - log_var.exp())
+
         if self.config.free_bit_kl:
             kld_mask = (kld_loss > self.config.lambda_target_kl).float()
             kld_loss = kld_mask * kld_loss
@@ -439,14 +462,18 @@ class BetaVaeTrainer:
                 # "It should be emphasized that, when we train the adversary,
                 # the gradient is not propagated back to the autoencoder ..."
                 adversary_loss = self.crossentropy_loss(
-                    adversarial_outputs[key],
+                    adversarial_outputs[key].detach(),
                     adversarial_targets[key].to(self.vae.device),
                 )
 
                 loss += multitask_loss
-                loss -= adversary_entropy
-                # Idk ask someone who is pytorch master
+                loss += adversary_entropy
                 loss += adversary_loss
+
+                total_positive_loss += multitask_loss
+                total_positive_loss += adversary_entropy
+
+                total_adversary_loss += adversary_loss
 
                 multitask_losses[key] = multitask_loss.detach()
                 adversary_entropy_losses[key] = adversary_entropy.detach()
@@ -454,6 +481,8 @@ class BetaVaeTrainer:
 
         return (
             loss,
+            total_positive_loss.detach() if total_positive_loss else torch.tensor(0),
+            total_adversary_loss.detach() if total_adversary_loss else torch.tensor(0),
             recons_loss.detach() if recons_loss else torch.tensor(0),
             kld_loss.detach() if kld_loss else torch.tensor(0),
             kld_attn_loss.detach() if kld_attn_loss else torch.tensor(0),
@@ -506,6 +535,8 @@ class BetaVaeTrainer:
         self.num_iter += 1
 
         loss = 0
+        loss_positive = 0
+        loss_adversary = 0
         recons_loss = 0
         kld_loss = 0
         kld_attn_loss = 0
@@ -556,14 +587,9 @@ class BetaVaeTrainer:
                 multitask_outputs[key] = self.multitask_classifiers[key](
                     mu[:, index_start:index_end]
                 )
-
-                # "It should be emphasized that, when we train the adversary,
-                # the gradient is not propagated back to the autoencoder ..."
-                # https://arxiv.org/abs/1808.04339v2
-                # TODO check if it applied correctly
                 adversarial_outputs[key] = self.adversarial_classifiers[key](
                     torch.cat(
-                        (mu.detach()[:, :index_start], mu.detach()[:, index_end:]),
+                        (mu[:, :index_start], mu[:, index_end:]),
                         dim=1,
                     )
                 )
@@ -604,6 +630,8 @@ class BetaVaeTrainer:
 
             (
                 batch_loss,
+                batch_positive_loss,
+                batch_adversary_loss,
                 batch_recons_loss,
                 batch_kld_loss,
                 batch_kld_attn_loss,
@@ -627,6 +655,8 @@ class BetaVaeTrainer:
             )
 
             loss += batch_loss
+            loss_positive += batch_positive_loss
+            loss_adversary += batch_adversary_loss
             recons_loss += batch_recons_loss
             kld_loss += batch_kld_loss
             kld_attn_loss += batch_kld_attn_loss
@@ -666,6 +696,8 @@ class BetaVaeTrainer:
 
         return (
             loss.item() / n_total,
+            loss_positive.item() / n_total,
+            loss_adversary.item() / n_total,
             recons_loss.item() / n_total,
             kld_loss.item() / n_total,
             kld_attn_loss.item() / n_total,
@@ -675,7 +707,54 @@ class BetaVaeTrainer:
             {k: v / n_total for (k, v) in adversary_losses_sum.items()},
         )
 
+    def save_results(self, epoch, local_iter, loss, loss_positive, checkpoint_path):
+        # Save checkpoint
+        torch.save(
+            {
+                "epoch": epoch,
+                "global_iteration": self.num_iter,
+                "local_iteration": local_iter,
+                "encoder": self.vae.encoder.state_dict(),
+                "decoder": self.vae.decoder.state_dict(),
+                "multitask_classifiers": self.multitask_classifiers.state_dict(),
+                "adversarial_classifiers": self.adversarial_classifiers.state_dict(),
+                "encoder_optimizer": self.encoder_optimizer.state_dict(),
+                "decoder_optimizer": self.decoder_optimizer.state_dict(),
+                "loss": loss,
+                "loss_positive": loss_positive,
+                "vocabulary_dict": self.vae.vocab.__dict__,
+                "embedding": self.vae.embedding.state_dict()
+                if self.vae.embedding is not None
+                else None,
+            },
+            os.path.join(
+                checkpoint_path,
+                "{}_{}.tar".format(self.num_iter, "checkpoint"),
+            ),
+        )
+
+        save_config_yaml(
+            os.path.join(
+                checkpoint_path,
+                "config.yaml".format(self.num_iter, "checkpoint"),
+            ),
+            self.general_config,
+            self.vae.encoder.config,
+            self.vae.decoder.config,
+            self.config,
+        )
+
     def fit(self):
+        temp_config = get_config_yaml(
+            self.general_config,
+            self.vae.encoder.config,
+            self.vae.decoder.config,
+            self.config,
+        )
+
+        logger.info(f"Starting training using config:")
+        logger.info(temp_config)
+
         # Initializations
         logging_losses = defaultdict(lambda: 0)
 
@@ -689,7 +768,7 @@ class BetaVaeTrainer:
         # Training loop
         logger.info("Training loop...")
         for epoch in range(self.general_config.train_epochs):
-            logger.info(f"Epoch {epoch}/{self.general_config.train_epochs}")
+            logger.info(f"Epoch {epoch + 1}/{self.general_config.train_epochs}")
             for local_iter, (
                 input_pad,
                 input_lengths,
@@ -707,6 +786,8 @@ class BetaVaeTrainer:
 
                 (
                     loss,
+                    loss_positive,
+                    loss_adversary,
                     recons_loss,
                     kld_loss,
                     kld_attn_loss,
@@ -725,33 +806,36 @@ class BetaVaeTrainer:
                     target_languages,
                 )
                 logging_losses["loss"] += loss
+                logging_losses["loss_positive"] += loss_positive
                 logging_losses["recons_loss"] += recons_loss
                 logging_losses["kld_loss"] += kld_loss
                 logging_losses["kld_attn_loss"] += kld_attn_loss
 
-                logging_losses["skills_mul"] += multitask_losses_sum["skills"]
-                logging_losses["education_mul"] += multitask_losses_sum["education"]
-                logging_losses["languages_mul"] += multitask_losses_sum["languages"]
+                if self.config.use_disentangled_loss:
+                    logging_losses["loss_adversary"] += loss_adversary
+                    logging_losses["skills_mul"] += multitask_losses_sum["skills"]
+                    logging_losses["education_mul"] += multitask_losses_sum["education"]
+                    logging_losses["languages_mul"] += multitask_losses_sum["languages"]
 
-                logging_losses[
-                    "skills_adversary_entropy_loss"
-                ] += adversary_entropy_losses_sum["skills"]
-                logging_losses[
-                    "education_adversary_entropy_loss"
-                ] += adversary_entropy_losses_sum["education"]
-                logging_losses[
-                    "languages_adversary_entropy_loss"
-                ] += adversary_entropy_losses_sum["languages"]
+                    logging_losses[
+                        "skills_adversary_entropy_loss"
+                    ] += adversary_entropy_losses_sum["skills"]
+                    logging_losses[
+                        "education_adversary_entropy_loss"
+                    ] += adversary_entropy_losses_sum["education"]
+                    logging_losses[
+                        "languages_adversary_entropy_loss"
+                    ] += adversary_entropy_losses_sum["languages"]
 
-                logging_losses["skills_adversary_loss"] += adversary_losses_sum[
-                    "skills"
-                ]
-                logging_losses["education_adversary_loss"] += adversary_losses_sum[
-                    "education"
-                ]
-                logging_losses["languages_adversary_loss"] += adversary_losses_sum[
-                    "languages"
-                ]
+                    logging_losses["skills_adversary_loss"] += adversary_losses_sum[
+                        "skills"
+                    ]
+                    logging_losses["education_adversary_loss"] += adversary_losses_sum[
+                        "education"
+                    ]
+                    logging_losses["languages_adversary_loss"] += adversary_losses_sum[
+                        "languages"
+                    ]
 
                 # Print and log progress
                 if self.num_iter % self.general_config.log_every == 0:
@@ -798,38 +882,9 @@ class BetaVaeTrainer:
                     for k in keys:
                         del logging_losses[k]
 
-                # Save checkpoint
                 if self.num_iter % self.general_config.save_every == 0:
-                    torch.save(
-                        {
-                            "epoch": epoch,
-                            "global_iteration": self.num_iter,
-                            "local_iteration": local_iter,
-                            "encoder": self.vae.encoder.state_dict(),
-                            "decoder": self.vae.decoder.state_dict(),
-                            "multitask_classifiers": self.multitask_classifiers.state_dict(),
-                            "adversarial_classifiers": self.adversarial_classifiers.state_dict(),
-                            "encoder_optimizer": self.encoder_optimizer.state_dict(),
-                            "decoder_optimizer": self.decoder_optimizer.state_dict(),
-                            "loss": loss,
-                            "vocabulary_dict": self.vae.vocab.__dict__,
-                            "embedding": self.vae.embedding.state_dict()
-                            if self.vae.embedding is not None
-                            else None,
-                        },
-                        os.path.join(
-                            checkpoint_path,
-                            "{}_{}.tar".format(self.num_iter, "checkpoint"),
-                        ),
+                    self.save_results(
+                        epoch, local_iter, loss, loss_positive, checkpoint_path
                     )
 
-                    save_config_yaml(
-                        os.path.join(
-                            checkpoint_path,
-                            "config.yaml".format(self.num_iter, "checkpoint"),
-                        ),
-                        self.general_config,
-                        self.vae.encoder.config,
-                        self.vae.decoder.config,
-                        self.config,
-                    )
+        self.save_results(epoch, local_iter, loss, loss_positive, checkpoint_path)

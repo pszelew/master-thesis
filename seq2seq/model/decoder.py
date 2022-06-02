@@ -173,14 +173,23 @@ class CandidateDecoder(nn.Module):
         #     self.config.max_seq_len,
         # )
 
-        self.attn_mu = nn.Linear(
-            self.config.lstm_hidden_dim,
-            self.config.lstm_hidden_dim,
-        )
+        self.attn_mu = nn.Identity()
 
-        self.attn_var = nn.Linear(
-            self.config.lstm_hidden_dim,
-            self.config.lstm_hidden_dim,
+        # self.attn_mu = nn.Linear(
+        #     self.config.lstm_hidden_dim,
+        #     self.config.lstm_hidden_dim,
+        # )
+
+        self.attn_var = nn.Sequential(
+            nn.Linear(
+                self.config.lstm_hidden_dim,
+                self.config.lstm_hidden_dim,
+            ),
+            nn.Tanh(),
+            nn.Linear(
+                self.config.lstm_hidden_dim,
+                self.config.lstm_hidden_dim,
+            ),
         )
 
         self.concat = nn.Linear(

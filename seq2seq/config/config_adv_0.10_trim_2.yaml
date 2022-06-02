@@ -31,7 +31,7 @@ vae:
     # https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html
     bow_remove_sentiment: True
     # Trim words rarer than this value from dataset.vocab
-    trim_tr: 3
+    trim_tr: 2
 
     # ------ Shared config -----
     # One of lang/fasttext/roberta
@@ -121,17 +121,17 @@ vae:
     # lambda coeficient weighting multitask loss for skills and
     # lambda coeficient weighting adversarial loss for skills
     lambda_mul_skills: 0.02
-    lambda_adv_skills: 0.02
+    lambda_adv_skills: 0.1
     adv_skills_lr: 0.00001
     # lambda coeficient weighting multitask loss for education and
     # lambda coeficient weighting adversarial loss for education
     lambda_mul_education: 0.02
-    lambda_adv_education: 0.02
+    lambda_adv_education: 0.1
     adv_education_lr: 0.00001
     # lambda coeficient weighting multitask loss for languages and
     # lambda coeficient weighting adversarial loss for education
     lambda_mul_languages: 0.02
-    lambda_adv_languages: 0.02
+    lambda_adv_languages: 0.1
     adv_languages_lr: 0.00001
     
     

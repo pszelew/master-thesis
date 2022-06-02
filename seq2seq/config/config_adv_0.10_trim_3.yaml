@@ -18,9 +18,9 @@ vae:
     # Decoder learning rate
     decoder_lr: 0.00005
     # Directory with dataset files (or to be created there)
-    datset_path: data/dataset_2/
+    datset_path: data/dataset_3/
     # Test index
-    test_index: test_2.index
+    test_index: test_3.index
     # Path to raw dataset file
     raw_data_path: data/extracted_sellers_old.json
     # Path for training checkpoints
@@ -121,17 +121,17 @@ vae:
     # lambda coeficient weighting multitask loss for skills and
     # lambda coeficient weighting adversarial loss for skills
     lambda_mul_skills: 0.02
-    lambda_adv_skills: 0.02
+    lambda_adv_skills: 0.10
     adv_skills_lr: 0.00001
     # lambda coeficient weighting multitask loss for education and
     # lambda coeficient weighting adversarial loss for education
     lambda_mul_education: 0.02
-    lambda_adv_education: 0.02
+    lambda_adv_education: 0.10
     adv_education_lr: 0.00001
     # lambda coeficient weighting multitask loss for languages and
     # lambda coeficient weighting adversarial loss for education
     lambda_mul_languages: 0.02
-    lambda_adv_languages: 0.02
+    lambda_adv_languages: 0.10
     adv_languages_lr: 0.00001
     
     

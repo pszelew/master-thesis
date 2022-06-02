@@ -18,9 +18,9 @@ vae:
     # Decoder learning rate
     decoder_lr: 0.00005
     # Directory with dataset files (or to be created there)
-    datset_path: data/dataset_2/
+    datset_path: data/dataset_3/
     # Test index
-    test_index: test_2.index
+    test_index: test_3.index
     # Path to raw dataset file
     raw_data_path: data/extracted_sellers_old.json
     # Path for training checkpoints
