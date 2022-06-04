@@ -108,14 +108,17 @@ class SellersDataset(torch.utils.data.Dataset):
 
         """
 
-        with open(
-            os.path.join(self.items_path, f"document_{idx:05}.pickle"), "rb"
-        ) as f:
-            data_row = pickle.load(f)
+        data_row = self._load_row(idx)
 
         return *self.embedder(
             self._create_textual_decription(data_row)
         ), *self._prepare_adversarial_targets(data_row)
+
+    def _load_row(self, idx: int):
+        with open(
+            os.path.join(self.items_path, f"document_{idx:05}.pickle"), "rb"
+        ) as f:
+            return pickle.load(f)
 
     def get_textual_description(self, idx: int) -> str:
         """
@@ -132,6 +135,10 @@ class SellersDataset(torch.utils.data.Dataset):
             data_row = pickle.load(f)
 
         return self._create_textual_decription(data_row)
+
+    def get_column_by_idx(self, idx: int, label: str):
+        data_row = self._load_row(idx)
+        return data_row[label]
 
     def prepare_dataset(self, save: bool = True, dropna: bool = True):
         """
@@ -585,6 +592,9 @@ class SellersDataset(torch.utils.data.Dataset):
         ]
         random.shuffle(in_desc)
         return " ".join(in_desc)
+
+    def _create_test_pair(self, source_idx: int, target_idx: int):
+        pass
 
     def _prepare_adversarial_targets(
         self, data_row: dict

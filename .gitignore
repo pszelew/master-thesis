@@ -1,7 +1,8 @@
 seq2seq/model/fasttext
 seq2seq/logs
 seq2seq/data
-seq2seq/data/
+seq2seq/config/config_adv*
+seq2seq/analyzis/
 seq2seq/checkpoints/
 seq2seq/tests/
 .ipynb_checkpoints

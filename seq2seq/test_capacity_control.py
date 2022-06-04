@@ -21,7 +21,7 @@ from config.general_config import GeneralConfig
 from dataset.dataset import SellersDataset
 
 
-ITERS = 1
+ITERS = 10
 EPOCHS = 200
 
 # If false, we can used cached content e.g. if we are testing the code
@@ -222,8 +222,8 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
         for idx in tqdm(range(len(dataset))):
             latents = {}
             # Both seeds have to me set up!!!
-            rng = np.random.default_rng(42)
-            random.seed(42)
+            # rng = np.random.default_rng(42)
+            # random.seed(42)
             row = dataset.__getitem__(idx)
             targets = {}
 
@@ -261,8 +261,8 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
 
     def prepare_test_data(dataset: SellersDataset):
         # We have to set both seeds!!!
-        rng = np.random.default_rng(42)
-        random.seed(42)
+        # rng = np.random.default_rng(42)
+        # random.seed(42)
 
         texts = dataset.test_dataset.progress_apply(
             lambda x: dataset._create_textual_decription(x, rng), axis=1
