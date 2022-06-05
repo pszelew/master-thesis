@@ -707,6 +707,25 @@ class BetaVaeTrainer:
             {k: v / n_total for (k, v) in adversary_losses_sum.items()},
         )
 
+    def load_results(self, checkpoint: dict):
+        self.epoch = checkpoint["epoch"]
+        self.num_iter = checkpoint["global_iteration"]
+        self.vae.encoder.load_state_dict(checkpoint["encoder"])
+        self.vae.decoder.load_state_dict(checkpoint["decoder"])
+        self.multitask_classifiers.load_state_dict(checkpoint["multitask_classifiers"])
+        self.adversarial_classifiers.load_state_dict(
+            checkpoint["adversarial_classifiers"]
+        )
+        self.adversarial_optimizers = {
+            k: v.load_state_dict(checkpoint["adversarial_optimizers"][k])
+            for (k, v) in self.adversarial_optimizers.items()
+        }
+        self.encoder_optimizer.load_state_dict(checkpoint["encoder_optimizer"])
+        self.decoder_optimizer.load_state_dict(checkpoint["decoder_optimizer"])
+        self.vae.embedding.load_state_dict(checkpoint["embedding"]) if checkpoint[
+            "embedding"
+        ] else None
+
     def save_results(self, epoch, local_iter, loss, loss_positive, checkpoint_path):
         # Save checkpoint
         torch.save(
@@ -718,6 +737,9 @@ class BetaVaeTrainer:
                 "decoder": self.vae.decoder.state_dict(),
                 "multitask_classifiers": self.multitask_classifiers.state_dict(),
                 "adversarial_classifiers": self.adversarial_classifiers.state_dict(),
+                "adversarial_optimizers": {
+                    k: v.state_dict() for (k, v) in self.adversarial_optimizers.items()
+                },
                 "encoder_optimizer": self.encoder_optimizer.state_dict(),
                 "decoder_optimizer": self.decoder_optimizer.state_dict(),
                 "loss": loss,

@@ -4,7 +4,7 @@ vae:
   general:
     # ------ Train specific -----
     # Save every n batches  
-    save_every: 1000
+    save_every: 500
     # Log loss every n batches
     log_every: 100
     # Print to console

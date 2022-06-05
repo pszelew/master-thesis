@@ -1,5 +1,7 @@
 import os
 import yaml
+from typing import Optional
+
 
 import torch
 from torch.utils.data import DataLoader
@@ -16,7 +18,7 @@ from dataset.dataset import SellersDataset
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def main(config_file: str):
+def main(config_file: str, experiment: Optional[str], checkpoint: Optional[str]):
     with open(os.path.join("config", config_file), "r") as file:
         try:
             config = yaml.safe_load(file)["vae"]
@@ -72,6 +74,12 @@ def main(config_file: str):
         writer_tensorboard,
     )
 
+    # Loading checkpoints
+    if experiment and checkpoint:
+        print(f"Continue the experiment {experiment}:{checkpoint}")
+        checkpoint = torch.load(os.path.join("checkpoints", experiment, checkpoint))
+        trainer.load_results(checkpoint)
+
     trainer.fit()
 
 
@@ -88,6 +96,24 @@ if __name__ == "__main__":
         required=True,
     )
 
+    parser.add_argument(
+        "--experiment",
+        "-e",
+        dest="experiment",
+        help="Experiment to continued."
+        " It should be the name of a folder in checkpoints dir e.g. candidate_vae_01_06_22_15",
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "--checkpoint",
+        "-c",
+        dest="checkpoint to be continued",
+        help="Checkpoint to be continued. Probably .tar file name. e.g. 7506_checkpoint.tar",
+        required=True,
+        default=None,
+    )
+
     args = parser.parse_args()
 
-    main(args.config_file)
+    main(args.config_file, args.experiment, args.checkpoint)

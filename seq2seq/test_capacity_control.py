@@ -265,7 +265,7 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
         # random.seed(42)
 
         texts = dataset.test_dataset.progress_apply(
-            lambda x: dataset._create_textual_decription(x, rng), axis=1
+            lambda x: dataset._create_textual_decription(x), axis=1
         )
         embedded = [dataset.embedder(text)[0].cpu() for text in tqdm(texts)]
 
@@ -451,6 +451,22 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Add data params")
+
+    parser.add_argument(
+        "--experiment",
+        "-e",
+        dest="experiment",
+        help="Experiment to be tested name."
+        " It should be the name of a folder in checkpoints dir e.g. candidate_vae_01_06_22_15",
+        required=True,
+    )
+    parser.add_argument(
+        "--checkpoint",
+        "-c",
+        dest="checkpoint",
+        help="Checkpoint to be tested. Probably .tar file name. e.g. 7506_checkpoint.tar",
+        required=True,
+    )
 
     parser.add_argument(
         "--experiment",
