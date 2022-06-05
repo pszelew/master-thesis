@@ -468,22 +468,6 @@ if __name__ == "__main__":
         required=True,
     )
 
-    parser.add_argument(
-        "--experiment",
-        "-e",
-        dest="experiment",
-        help="Experiment to be tested name."
-        " It should be the name of a folder in checkpoints dir e.g. candidate_vae_01_06_22_15",
-        required=True,
-    )
-    parser.add_argument(
-        "--checkpoint",
-        "-c",
-        dest="checkpoint",
-        help="Checkpoint to be tested. Probably .tar file name. e.g. 7506_checkpoint.tar",
-        required=True,
-    )
-
     args = parser.parse_args()
 
     EXPERIMENT = args.experiment
