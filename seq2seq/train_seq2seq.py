@@ -107,10 +107,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--checkpoint",
-        "-c",
-        dest="checkpoint to be continued",
+        dest="checkpoint",
         help="Checkpoint to be continued. Probably .tar file name. e.g. 7506_checkpoint.tar",
-        required=True,
+        required=False,
         default=None,
     )
 

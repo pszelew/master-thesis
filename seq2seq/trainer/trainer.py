@@ -462,7 +462,7 @@ class BetaVaeTrainer:
                 # "It should be emphasized that, when we train the adversary,
                 # the gradient is not propagated back to the autoencoder ..."
                 adversary_loss = self.crossentropy_loss(
-                    adversarial_outputs[key].detach(),
+                    adversarial_outputs[key],
                     adversarial_targets[key].to(self.vae.device),
                 )
 
@@ -591,7 +591,7 @@ class BetaVaeTrainer:
                     torch.cat(
                         (mu[:, :index_start], mu[:, index_end:]),
                         dim=1,
-                    )
+                    ).detach()
                 )
 
         decoder_input = z

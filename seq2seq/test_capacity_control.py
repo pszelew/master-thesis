@@ -21,8 +21,10 @@ from config.general_config import GeneralConfig
 from dataset.dataset import SellersDataset
 
 
-ITERS = 10
+ITERS = 2
 EPOCHS = 200
+LR = 0.2
+PATIENCE = 10
 
 # If false, we can used cached content e.g. if we are testing the code
 CREATE_DATASET = True
@@ -248,11 +250,15 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
                 # Use mu or z?
                 # latents[key] = [mu[:, index_start:index_end], row[f"{key}_vec"]]
                 latents[key] = [
-                    z[:, index_start:index_end],
+                    mu[:, index_start:index_end],
+                    # torch.cat(
+                    #     (z[:, :index_start], z[:, index_end:]),
+                    #     dim=1,
+                    # ),
                     torch.cat(
-                        (z[:, :index_start], z[:, index_end:]),
+                        (mu[:, :index_start], mu[:, index_end:]),
                         dim=1,
-                    ),
+                    )[:, : trainer_config.skills_dim],
                     targets[key],
                 ]
 
@@ -291,11 +297,15 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
             # Use mu or z?
             # latents[key] = [mu[:, index_start:index_end], row[f"{key}_vec"]]
             latents[key] = [
-                z[:, index_start:index_end],
+                mu[:, index_start:index_end],
+                # torch.cat(
+                #     (z[:, :index_start], z[:, index_end:]),
+                #     dim=1,
+                # ),
                 torch.cat(
-                    (z[:, :index_start], z[:, index_end:]),
+                    (mu[:, :index_start], mu[:, index_end:]),
                     dim=1,
-                ),
+                )[:, : trainer_config.skills_dim],
                 row[f"{key}_vec"],
             ]
 
@@ -376,11 +386,21 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
             }
         )
         # Retreiving target using all except target. Classifiers should fail :)
+        # adversarial_classifiers = nn.ModuleDict(
+        #     {
+        #         target: nn.Linear(
+        #             general_config.latent_dim
+        #             - disentangled_targets[target]["latent_dim"],
+        #             disentangled_targets[target]["output_dim"],
+        #         ).to(DEVICE)
+        #         for target in disentangled_targets
+        #     }
+        # )
+
         adversarial_classifiers = nn.ModuleDict(
             {
                 target: nn.Linear(
-                    general_config.latent_dim
-                    - disentangled_targets[target]["latent_dim"],
+                    disentangled_targets[target]["latent_dim"],
                     disentangled_targets[target]["output_dim"],
                 ).to(DEVICE)
                 for target in disentangled_targets
@@ -390,7 +410,7 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
         multitask_optimizers = {
             target: torch.optim.Adam(
                 multitask_classifiers[target].parameters(),
-                lr=0.05,
+                lr=LR,
             )
             for target in disentangled_targets
         }
@@ -398,7 +418,7 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
         adversarial_optimizers = {
             target: torch.optim.Adam(
                 adversarial_classifiers[target].parameters(),
-                lr=0.05,
+                lr=LR,
             )
             for target in disentangled_targets
         }
@@ -414,7 +434,7 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
                 writer=writer_tensorboard,
                 epochs=EPOCHS,
                 print_metrics=False,
-                patience=10,
+                patience=PATIENCE,
                 run_prefix=f"capacity_{_type}_{target}_{EXPERIMENT}_{CHECKPOINT.replace('.tar', '')}",
                 _type=_type,
             )
@@ -429,7 +449,7 @@ def test() -> tuple[dict[str, list], dict[str, list]]:
                 writer=writer_tensorboard,
                 epochs=EPOCHS,
                 print_metrics=False,
-                patience=10,
+                patience=PATIENCE,
                 run_prefix=f"capacity_{_type}_{target}_{EXPERIMENT}_{CHECKPOINT.replace('.tar', '')}",
                 _type=_type,
             )

@@ -107,7 +107,8 @@ vae:
     # Free bit vae loss
     # from paper https://arxiv.org/pdf/1606.04934.pdf
     free_bit_kl: False
-    # Lambda value from paper https://arxiv.org/pdf/1606.04934.pdf
+    # Lambda value from paper https://arxiv.org/pdf/1606.04934.pdf 
+    # Used if free_bit_kl is True
     lambda_target_kl: 0.5
 
     # Clip value for gradients
